@@ -100,6 +100,9 @@ export interface TrendPoint {
   timeMs: number | null
   /** Trailing mean over the window, or null until the window fills. */
   rollingMs: number | null
+  /** Trailing 25th and 75th percentiles over the same window. */
+  p25: number | null
+  p75: number | null
 }
 
 /**
@@ -113,26 +116,97 @@ export function trend(solves: Solve[], window = 50): TrendPoint[] {
 
   // Sliding window: one pass, so a few thousand imported solves stay instant.
   let sum = 0
-  let finished = 0
+  // Window contents kept sorted, so percentiles are a lookup rather than a
+  // sort at every step.
+  const sorted: number[] = []
 
   return ordered.map((s, i) => {
     const t = effectiveMs(s)
     if (t !== null) {
       sum += t
-      finished++
+      insertSorted(sorted, t)
     }
     const leaving = i >= window ? effectiveMs(ordered[i - window]) : undefined
     if (leaving != null) {
       sum -= leaving
-      finished--
+      removeSorted(sorted, leaving)
     }
-    const full = i + 1 >= window && finished > 0
+    const full = i + 1 >= window && sorted.length > 0
 
     return {
       index: i + 1,
       at: s.createdAt,
       timeMs: t,
-      rollingMs: full ? sum / finished : null,
+      rollingMs: full ? sum / sorted.length : null,
+      p25: full ? percentile(sorted, 0.25) : null,
+      p75: full ? percentile(sorted, 0.75) : null,
     }
   })
+}
+
+/** Index of the first element >= value, in a sorted array. */
+function lowerBound(arr: number[], value: number): number {
+  let lo = 0
+  let hi = arr.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (arr[mid] < value) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+function insertSorted(arr: number[], value: number): void {
+  arr.splice(lowerBound(arr, value), 0, value)
+}
+
+function removeSorted(arr: number[], value: number): void {
+  const i = lowerBound(arr, value)
+  if (arr[i] === value) arr.splice(i, 1)
+}
+
+/** Linear-interpolated percentile of a sorted array. */
+function percentile(sorted: number[], q: number): number {
+  if (sorted.length === 1) return sorted[0]
+  const pos = (sorted.length - 1) * q
+  const lo = Math.floor(pos)
+  const hi = Math.ceil(pos)
+  return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo)
+}
+
+export interface CalendarDay {
+  /** Local date, as YYYY-MM-DD. */
+  date: string
+  count: number
+  /** Mean of finished solves that day, or null if all were DNFs. */
+  meanMs: number | null
+}
+
+/** Local YYYY-MM-DD; practice days are local days, not UTC ones. */
+export function dayKey(ms: number): string {
+  const d = new Date(ms)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+/** Solves per calendar day, for the practice grid. */
+export function calendarDays(solves: Solve[]): Map<string, CalendarDay> {
+  const days = new Map<string, { count: number; sum: number; finished: number }>()
+  for (const s of solves) {
+    const key = dayKey(s.createdAt)
+    const day = days.get(key) ?? { count: 0, sum: 0, finished: 0 }
+    day.count++
+    const t = effectiveMs(s)
+    if (t !== null) {
+      day.sum += t
+      day.finished++
+    }
+    days.set(key, day)
+  }
+
+  const out = new Map<string, CalendarDay>()
+  for (const [date, d] of days) {
+    out.set(date, { date, count: d.count, meanMs: d.finished ? d.sum / d.finished : null })
+  }
+  return out
 }

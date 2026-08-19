@@ -19,6 +19,9 @@ Phase 1 — core timer, local only:
   trend with a rolling mean overlaid
 - parity tracking on 4x4–7x7: one prompt per solve, a distribution stacked by
   parity category, and mean/sd per category with the gap to the clean mean
+- sub-X rate against a per-session goal
+- practice calendar: solves per day, shaded by quartile of your active days
+- rolling p25–p75 band on the trend chart, alongside the rolling mean
 - import from csTimer: each session becomes a session here, keeping scrambles
   and dates, with the event detected from its scramble type and overridable
 

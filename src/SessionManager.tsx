@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { EVENTS, MAX_SESSIONS, type EventId, type Session } from './types'
 import type { Store } from './storage'
+import { parseTime } from './parseTime'
+import { formatMs } from './format'
 
 /**
  * csTimer-style session management: any number of named sessions up to the
@@ -81,6 +83,19 @@ export function SessionManager({
                   </option>
                 ))}
               </select>
+              <input
+                className="goal-input"
+                defaultValue={s.goalMs ? formatMs(s.goalMs) : ''}
+                placeholder="goal"
+                aria-label="Sub-X goal"
+                title="Target time for the sub-X rate, e.g. 12 or 1:00"
+                onBlur={(e) => {
+                  const text = e.target.value.trim()
+                  const ms = text === '' ? undefined : (parseTime(text) ?? undefined)
+                  patch(s.id, { goalMs: ms })
+                  e.target.value = ms ? formatMs(ms) : ''
+                }}
+              />
               <span className="count">{counts[s.id] ?? 0}</span>
               {confirming === s.id ? (
                 <button className="danger small" onClick={() => remove(s.id)}>

@@ -42,6 +42,11 @@ export interface Session {
   /** Which event this session scrambles for. Changeable after the fact. */
   event: EventId
   createdAt: number
+  /**
+   * Target time in ms for the sub-X rate. Per session, because sub-12 on 3x3
+   * and sub-60 on 4x4 are not the same question. Unset until chosen.
+   */
+  goalMs?: number
 }
 
 import type { ParityId } from './parity'

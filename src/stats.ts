@@ -110,3 +110,38 @@ export function parityGroups(solves: Solve[], event: EventId): ParityGroup[] {
   const rank = (g: ParityGroup) => (g.key === 'none' ? -1 : g.key === 'untracked' ? 1e9 : 0)
   return groups.sort((a, b) => rank(a) - rank(b) || b.count - a.count)
 }
+
+export interface SubXRate {
+  goalMs: number
+  /** Solves strictly under the goal. */
+  under: number
+  /** Every solve, DNFs included -- a DNF is not a sub-X solve. */
+  total: number
+  rate: number
+}
+
+/**
+ * Share of solves under the target. DNFs count against you rather than being
+ * dropped: they are failures, and excluding them would flatter the rate.
+ */
+export function subXRate(solves: Solve[], goalMs: number): SubXRate | null {
+  if (solves.length === 0) return null
+  const under = solves.filter((s) => {
+    const t = effectiveMs(s)
+    return t !== null && t < goalMs
+  }).length
+  return { goalMs, under, total: solves.length, rate: under / solves.length }
+}
+
+/**
+ * A round target just under the current mean, so a new session gets a goal
+ * that is already meaningful. Coarser steps for slower events, where a
+ * one-second target would be false precision.
+ */
+export function suggestGoal(solves: Solve[]): number | null {
+  const mean = sessionMean(solves)
+  if (mean === null) return null
+  const step = mean < 20000 ? 1000 : mean < 60000 ? 5000 : 10000
+  const goal = Math.floor(mean / step) * step
+  return goal > 0 ? goal : step
+}

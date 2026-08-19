@@ -513,3 +513,55 @@ kbd {
 .breakdown tr:last-child td { border-bottom: none; }
 .breakdown tr.muted td { color: var(--dim); }
 .breakdown td.slower { color: #e88a5a; }
+
+/* ---- percentile band -------------------------------------------------- */
+/* Same hue as the rolling mean: the band and the line describe one entity. */
+.band { fill: var(--series-2); opacity: 0.16; stroke: none; }
+.swatch.band {
+  width: 14px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--series-2);
+  opacity: 0.35;
+}
+
+.ctrl-group { display: flex; gap: 14px; align-items: center; }
+.ctrl input[type='checkbox'] { width: 14px; height: 14px; margin: 0 2px 0 0; }
+
+/* ---- practice calendar ------------------------------------------------ */
+/* Sequential ramp: one hue, light to dark, for one magnitude. */
+.cal-cell.l0 { fill: #1b2029; }
+.cal-cell.l1 { fill: #14375f; }
+.cal-cell.l2 { fill: #1d5490; }
+.cal-cell.l3 { fill: #2a72c4; }
+.cal-cell.l4 { fill: #3987e5; }
+.cal-cell { transition: none; }
+.cal-cell:hover { stroke: var(--text); stroke-width: 1.5; }
+
+.cal-swatch { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+.cal-swatch.l0 { background: #1b2029; }
+.cal-swatch.l1 { background: #14375f; }
+.cal-swatch.l2 { background: #1d5490; }
+.cal-swatch.l3 { background: #2a72c4; }
+.cal-swatch.l4 { background: #3987e5; }
+
+.cal-label { fill: var(--dim); font-size: 10px; }
+.cal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.cal-scroll { overflow-x: auto; padding-bottom: 4px; }
+.cal-legend { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
+.cal-legend .note { margin: 0 4px; font-size: 11px; }
+
+.goal-input {
+  width: 66px;
+  flex-shrink: 0;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  padding: 5px 8px;
+  text-align: right;
+}
+.goal-input:focus { outline: none; border-color: var(--accent); }

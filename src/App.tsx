@@ -8,6 +8,7 @@ import { useTimer } from './useTimer'
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings } from './settings'
 import { parseTime } from './parseTime'
 import { Histogram } from './charts/Histogram'
+import { PracticeCalendar } from './charts/PracticeCalendar'
 import { TrendChart } from './charts/TrendChart'
 import { ImportDialog } from './ImportDialog'
 import { SessionManager } from './SessionManager'
@@ -15,7 +16,7 @@ import { SolveDetail } from './SolveDetail'
 import { ParityPrompt } from './ParityPrompt'
 import { ParityBreakdown } from './ParityBreakdown'
 import { hasParity, type ParityId } from './parity'
-import { stdDev } from './stats'
+import { stdDev, subXRate, suggestGoal } from './stats'
 
 export default function App() {
   const [store, setStore] = useState<Store>(() => loadStore())
@@ -30,6 +31,8 @@ export default function App() {
   const [detailId, setDetailId] = useState<string | null>(null)
   const [bucketMs, setBucketMs] = useState(100)
   const [rollWindow, setRollWindow] = useState(50)
+  const [showBand, setShowBand] = useState(true)
+  const [calendarScope, setCalendarScope] = useState<'session' | 'all'>('session')
   const [toast, setToast] = useState('')
   // Solve awaiting a parity answer; it is already recorded, so a reload
   // during the prompt keeps the time and simply leaves parity unset.
@@ -154,6 +157,10 @@ export default function App() {
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) =>
     setSettings((prev) => ({ ...prev, [key]: value }))
 
+  // An unset goal falls back to a suggestion from the data, so the rate is
+  // useful before anyone opens the session manager.
+  const goal = session.goalMs ?? suggestGoal(solves)
+  const subX = goal !== null ? subXRate(solves, goal) : null
   const parityEvent = hasParity(session.event)
   const pending = pendingParity ? store.solves.find((s) => s.id === pendingParity) : null
   const detail = detailId ? solves.find((s) => s.id === detailId) : null
@@ -328,18 +335,49 @@ export default function App() {
           <section className="panel">
             <div className="panel-head">
               <h2>improvement over time</h2>
-              <label className="ctrl">
-                rolling mean of
-                <select value={rollWindow} onChange={(e) => setRollWindow(Number(e.target.value))}>
-                  <option value={5}>5</option>
-                  <option value={12}>12</option>
-                  <option value={50}>50</option>
-                  <option value={100}>100</option>
-                  <option value={500}>500</option>
-                </select>
-              </label>
+              <div className="ctrl-group">
+                <label className="ctrl">
+                  <input
+                    type="checkbox"
+                    checked={showBand}
+                    onChange={(e) => setShowBand(e.target.checked)}
+                  />
+                  percentile band
+                </label>
+                <label className="ctrl">
+                  window
+                  <select value={rollWindow} onChange={(e) => setRollWindow(Number(e.target.value))}>
+                    <option value={5}>5</option>
+                    <option value={12}>12</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                    <option value={500}>500</option>
+                  </select>
+                </label>
+              </div>
             </div>
-            <TrendChart solves={solves} window={rollWindow} />
+            <TrendChart solves={solves} window={rollWindow} showBand={showBand} />
+          </section>
+
+          <section className="panel">
+            <div className="panel-head">
+              <h2>practice</h2>
+              <div className="seg">
+                <button
+                  className={calendarScope === 'session' ? 'active' : ''}
+                  onClick={() => setCalendarScope('session')}
+                >
+                  this session
+                </button>
+                <button
+                  className={calendarScope === 'all' ? 'active' : ''}
+                  onClick={() => setCalendarScope('all')}
+                >
+                  all sessions
+                </button>
+              </div>
+            </div>
+            <PracticeCalendar solves={calendarScope === 'all' ? store.solves : solves} />
           </section>
 
           {parityEvent && (
@@ -362,6 +400,13 @@ export default function App() {
           <Stat label="best" value={fmt(best(solves))} />
           <Stat label="mean" value={fmt(sessionMean(solves))} />
           <Stat label="std dev" value={fmt(stdDev(solves))} />
+          {goal !== null && (
+            <Stat
+              label={`sub-${formatMs(goal).replace(/\.00$/, '')}`}
+              value={subX ? `${Math.round(subX.rate * 100)}%` : '—'}
+              title={subX ? `${subX.under} of ${subX.total} solves, DNFs included` : undefined}
+            />
+          )}
           <Stat label="ao5" value={fmt(averageOf(solves, 5))} />
           <Stat label="ao12" value={fmt(averageOf(solves, 12))} />
           <Stat label="best ao5" value={fmt(bestAverage(solves, 5))} />
@@ -465,9 +510,9 @@ function fmt(v: number | null | undefined): string {
   return v === undefined ? '—' : formatMs(v)
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div className="stat">
+    <div className="stat" title={title}>
       <span>{label}</span>
       <strong>{value}</strong>
     </div>

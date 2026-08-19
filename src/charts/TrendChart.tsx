@@ -12,7 +12,15 @@ const PAD = { top: 14, right: 12, bottom: 34, left: 52 }
  * Both series are times in the same unit, so they share one y-axis -- never a
  * second scale.
  */
-export function TrendChart({ solves, window }: { solves: Solve[]; window: number }) {
+export function TrendChart({
+  solves,
+  window,
+  showBand = true,
+}: {
+  solves: Solve[]
+  window: number
+  showBand?: boolean
+}) {
   const { ref, width } = useWidth()
   const [hover, setHover] = useState<number | null>(null)
 
@@ -57,10 +65,25 @@ export function TrendChart({ solves, window }: { solves: Solve[]; window: number
     return PAD.top + plotH - Math.min(1, Math.max(0, frac)) * plotH
   }
 
-  const line = points
-    .filter((p) => p.rollingMs !== null)
+  const withRolling = points.filter((p) => p.rollingMs !== null)
+
+  const line = withRolling
     .map((p, i) => `${i === 0 ? 'M' : 'L'}${x(p.index).toFixed(1)},${y(p.rollingMs!).toFixed(1)}`)
     .join(' ')
+
+  // Closed area: p75 left-to-right, then p25 back again.
+  const band =
+    showBand && withRolling.length > 1
+      ? withRolling
+          .map((p, i) => `${i === 0 ? 'M' : 'L'}${x(p.index).toFixed(1)},${y(p.p75!).toFixed(1)}`)
+          .join(' ') +
+        ' ' +
+        [...withRolling]
+          .reverse()
+          .map((p) => `L${x(p.index).toFixed(1)},${y(p.p25!).toFixed(1)}`)
+          .join(' ') +
+        ' Z'
+      : ''
 
   const yTicks = timeTicks(scales.min, scales.max)
   const active = hover !== null ? points[hover] : null
@@ -82,6 +105,11 @@ export function TrendChart({ solves, window }: { solves: Solve[]; window: number
         <span>
           <i className="swatch line" /> rolling mean of {window}
         </span>
+        {showBand && (
+          <span>
+            <i className="swatch band" /> middle half (p25–p75)
+          </span>
+        )}
         {scales.clipped > 0 && (
           <span className="dim">
             {scales.clipped} slower {scales.clipped === 1 ? 'solve' : 'solves'} above the axis
@@ -121,6 +149,7 @@ export function TrendChart({ solves, window }: { solves: Solve[]; window: number
           ))}
         </g>
 
+        {band && <path d={band} className="band" />}
         <path d={line} className="rolling" />
 
         {active && (
