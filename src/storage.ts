@@ -15,10 +15,16 @@ export function loadSolves(): Solve[] {
   }
 }
 
-export function saveSolves(solves: Solve[]): void {
+/**
+ * Returns false if the write failed -- almost always the ~5MB quota, which a
+ * large csTimer import can reach. The caller must surface that: silently
+ * dropping solves the user thinks are saved is the worst outcome here.
+ */
+export function saveSolves(solves: Solve[]): boolean {
   try {
     localStorage.setItem(KEY, JSON.stringify(solves))
+    return true
   } catch {
-    // Quota exceeded or storage disabled -- solves stay in memory this session.
+    return false
   }
 }

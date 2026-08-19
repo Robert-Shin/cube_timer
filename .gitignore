@@ -10,3 +10,6 @@ dist-ssr
 .vscode/*
 !.vscode/extensions.json
 .idea
+
+# Personal cstimer exports -- test data, never commit
+cstimer_*.txt

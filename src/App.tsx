@@ -7,6 +7,9 @@ import { loadSolves, saveSolves } from './storage'
 import { useTimer } from './useTimer'
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings } from './settings'
 import { parseTime } from './parseTime'
+import { Histogram } from './charts/Histogram'
+import { TrendChart } from './charts/TrendChart'
+import { ImportDialog } from './ImportDialog'
 
 export default function App() {
   const [event, setEvent] = useState<EventId>('333')
@@ -16,6 +19,11 @@ export default function App() {
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
   const [showSettings, setShowSettings] = useState(false)
   const [typed, setTyped] = useState('')
+  const [tab, setTab] = useState<'timer' | 'stats'>('timer')
+  const [importing, setImporting] = useState(false)
+  const [bucketMs, setBucketMs] = useState(100)
+  const [rollWindow, setRollWindow] = useState(50)
+  const [toast, setToast] = useState('')
 
   // Newest first, so stats windows are just slices from the front.
   const solves = useMemo(
@@ -23,7 +31,11 @@ export default function App() {
     [allSolves, event],
   )
 
-  useEffect(() => saveSolves(allSolves), [allSolves])
+  useEffect(() => {
+    if (!saveSolves(allSolves) && allSolves.length > 0) {
+      setToast("couldn't save — browser storage is full")
+    }
+  }, [allSolves])
   useEffect(() => saveSettings(settings), [settings])
 
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) =>
@@ -69,6 +81,17 @@ export default function App() {
     setTyped('')
   }
 
+  const handleImport = (imported: Solve[]) => {
+    // Imported solves carry their original timestamps, so re-sort the whole
+    // list newest-first rather than just prepending them.
+    setAllSolves((prev) =>
+      [...imported, ...prev].sort((a, b) => b.createdAt - a.createdAt),
+    )
+    setImporting(false)
+    setToast(`imported ${imported.length} solves`)
+    setTimeout(() => setToast(''), 4000)
+  }
+
   const setPenalty = (id: string, penalty: Penalty) =>
     setAllSolves((prev) =>
       prev.map((s) =>
@@ -103,6 +126,17 @@ export default function App() {
           ))}
         </div>
         <div className="header-actions">
+          <div className="seg">
+            <button className={tab === 'timer' ? 'active' : ''} onClick={() => setTab('timer')}>
+              timer
+            </button>
+            <button className={tab === 'stats' ? 'active' : ''} onClick={() => setTab('stats')}>
+              stats
+            </button>
+          </div>
+          <button className="ghost" onClick={() => setImporting(true)}>
+            import
+          </button>
           <button className="ghost" onClick={() => nextScramble(event)}>
             new scramble
           </button>
@@ -159,6 +193,8 @@ export default function App() {
         </section>
       )}
 
+      {tab === 'timer' && (
+      <>
       <p className="scramble">{scrambling ? 'generating scramble…' : scramble}</p>
 
       {typing ? (
@@ -188,6 +224,47 @@ export default function App() {
               ? ''
               : 'release to go'}
       </p>
+
+      </>
+      )}
+
+      {tab === 'stats' && (
+        <div className="stats-view">
+          <section className="panel">
+            <div className="panel-head">
+              <h2>distribution · {EVENTS.find((e) => e.id === event)!.name}</h2>
+              <label className="ctrl">
+                bucket
+                <select value={bucketMs} onChange={(e) => setBucketMs(Number(e.target.value))}>
+                  <option value={50}>0.05s</option>
+                  <option value={100}>0.1s</option>
+                  <option value={250}>0.25s</option>
+                  <option value={500}>0.5s</option>
+                  <option value={1000}>1s</option>
+                </select>
+              </label>
+            </div>
+            <Histogram solves={solves} bucketMs={bucketMs} />
+          </section>
+
+          <section className="panel">
+            <div className="panel-head">
+              <h2>improvement over time</h2>
+              <label className="ctrl">
+                rolling mean of
+                <select value={rollWindow} onChange={(e) => setRollWindow(Number(e.target.value))}>
+                  <option value={5}>5</option>
+                  <option value={12}>12</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={500}>500</option>
+                </select>
+              </label>
+            </div>
+            <TrendChart solves={solves} window={rollWindow} />
+          </section>
+        </div>
+      )}
 
       <div className="body">
         <section className="panel">
@@ -236,6 +313,11 @@ export default function App() {
           </ol>
         </section>
       </div>
+
+      {importing && (
+        <ImportDialog onImport={handleImport} onClose={() => setImporting(false)} />
+      )}
+      {toast && <div className="toast">{toast}</div>}
     </div>
   )
 }
