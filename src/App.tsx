@@ -62,6 +62,13 @@ export default function App() {
   useEffect(() => saveSettings(settings), [settings])
 
   useEffect(() => {
+    // 'system' removes the attribute so prefers-color-scheme decides.
+    const root = document.documentElement
+    if (settings.theme === 'system') root.removeAttribute('data-theme')
+    else root.setAttribute('data-theme', settings.theme)
+  }, [settings.theme])
+
+  useEffect(() => {
     if (settings.inputMode === 'typing' && tab === 'timer') typedInput.current?.focus()
   }, [settings.inputMode, tab, session.id])
 
@@ -167,9 +174,19 @@ export default function App() {
   const latest = solves[0]
 
   return (
-    <div className={`app state-${state}`}>
-      <header>
+    <div
+      className={`app state-${state}`}
+      // The active session's hue becomes the accent for the whole page.
+      style={session.color ? ({ '--accent': `var(--s${session.color})` } as React.CSSProperties) : undefined}
+    >
+      <header className="dimmable">
+        <div className="wordmark">
+          <span className="mark" />
+          <span className="cube">Cube</span>
+          <span className="stats">Stats</span>
+        </div>
         <div className="session-pick">
+          <span className="dot" />
           <select
             value={session.id}
             onChange={(e) => setStore((prev) => ({ ...prev, activeId: e.target.value }))}
@@ -205,7 +222,7 @@ export default function App() {
       </header>
 
       {showSettings && (
-        <section className="panel settings">
+        <section className="panel settings dimmable">
           <div className="panel-head">
             <h2>settings</h2>
             <button className="ghost small" onClick={() => setSettings(DEFAULT_SETTINGS)}>
@@ -225,6 +242,24 @@ export default function App() {
               <button className={typing ? 'active' : ''} onClick={() => update('inputMode', 'typing')}>
                 typing
               </button>
+            </div>
+          </div>
+
+          <div className="setting">
+            <div>
+              <strong>Theme</strong>
+              <p>Follow the system setting, or pick one.</p>
+            </div>
+            <div className="seg">
+              {(['system', 'light', 'dark'] as const).map((t) => (
+                <button
+                  key={t}
+                  className={settings.theme === t ? 'active' : ''}
+                  onClick={() => update('theme', t)}
+                >
+                  {t}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -265,7 +300,7 @@ export default function App() {
 
       {tab === 'timer' && (
         <>
-          <p className="scramble">
+          <p className="scramble dimmable">
             {scrambling ? 'generating scramble…' : scramble}
             <button className="ghost small refresh" onClick={() => nextScramble(session.event)}>
               ↻
@@ -273,7 +308,7 @@ export default function App() {
           </p>
 
           {typing ? (
-            <form className="typed" onSubmit={submitTyped}>
+            <form className="typed dimmable" onSubmit={submitTyped}>
               <input
                 ref={typedInput}
                 value={typed}
@@ -292,7 +327,7 @@ export default function App() {
               {settings.hideTimeWhileSolving && state === 'running' ? 'solving' : formatMs(display)}
             </div>
           )}
-          <p className="hint">
+          <p className="hint dimmable">
             {typing
               ? parseTime(typed) !== null
                 ? formatMs(parseTime(typed)!)
@@ -309,7 +344,7 @@ export default function App() {
       )}
 
       {tab === 'stats' && (
-        <div className="stats-view">
+        <div className="stats-view dimmable">
           <section className="panel">
             <div className="panel-head">
               <h2>distribution · {session.name}</h2>
@@ -391,7 +426,7 @@ export default function App() {
         </div>
       )}
 
-      <div className="body">
+      <div className="body dimmable">
         <section className="panel">
           <h2>
             {session.name} · {eventName(session.event)}

@@ -47,7 +47,15 @@ export interface Session {
    * and sub-60 on 4x4 are not the same question. Unset until chosen.
    */
   goalMs?: number
+  /**
+   * Accent slot 1-8, indexing the theme's series hues rather than a literal
+   * color, so a session keeps its identity when the theme changes.
+   */
+  color?: number
 }
+
+/** Accent slots offered for sessions, in the palette's fixed order. */
+export const SESSION_COLORS = [1, 2, 3, 4, 5, 7, 8] as const
 
 import type { ParityId } from './parity'
 

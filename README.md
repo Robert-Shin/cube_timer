@@ -1,4 +1,4 @@
-# Cube Timer
+# CubeStats
 
 A speedcubing timer in the spirit of csTimer, built to grow richer statistics.
 
@@ -13,8 +13,9 @@ Phase 1 — core timer, local only:
 - named sessions (up to 20), each bound to an event, so two 3x3 sessions can coexist
 - click any solve for its scramble, date, and penalty controls
 - solves persist in `localStorage`, per session
-- settings: stopwatch or hand-typed entry, hide the time while solving,
-  parity tracking
+- settings: theme (system/light/dark), stopwatch or hand-typed entry, hide the
+  time while solving, parity tracking
+- per-session accent colour, applied across the interface
 - stats tab: solve-time distribution (0.05–1s bins) and a chronological
   trend with a rolling mean overlaid
 - parity tracking on 4x4–7x7: one prompt per solve, a distribution stacked by

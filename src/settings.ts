@@ -1,4 +1,5 @@
 export type InputMode = 'timer' | 'typing'
+export type Theme = 'system' | 'light' | 'dark'
 
 export interface Settings {
   /** 'timer' = space-bar stopwatch, 'typing' = enter times by hand. */
@@ -7,12 +8,15 @@ export interface Settings {
   hideTimeWhileSolving: boolean
   /** Ask which parities occurred after each solve, on events that have them. */
   trackParity: boolean
+  /** 'system' follows the OS; the others override it in both directions. */
+  theme: Theme
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   inputMode: 'timer',
   hideTimeWhileSolving: false,
   trackParity: false,
+  theme: 'system',
 }
 
 const KEY = 'cube-timer.settings.v1'

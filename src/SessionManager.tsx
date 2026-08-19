@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { EVENTS, MAX_SESSIONS, type EventId, type Session } from './types'
+import { EVENTS, MAX_SESSIONS, SESSION_COLORS, type EventId, type Session } from './types'
 import type { Store } from './storage'
 import { parseTime } from './parseTime'
 import { formatMs } from './format'
@@ -72,6 +72,17 @@ export function SessionManager({
                 onChange={(e) => patch(s.id, { name: e.target.value })}
                 aria-label="Session name"
               />
+              <span className="swatch-picker">
+                {SESSION_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    className={`swatch-dot ${(s.color ?? 1) === c ? 'on' : ''}`}
+                    style={{ background: `var(--s${c})` }}
+                    aria-label={`Accent ${c}`}
+                    onClick={() => patch(s.id, { color: c })}
+                  />
+                ))}
+              </span>
               <select
                 value={s.event}
                 onChange={(e) => patch(s.id, { event: e.target.value as EventId })}
