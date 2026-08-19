@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { eventName, MAX_SESSIONS, type EventId, type Penalty, type Session, type Solve } from './types'
 import { formatMs, formatSolve } from './format'
 import { averageOf, best, bestAverage, sessionMean } from './stats'
@@ -34,6 +34,7 @@ export default function App() {
   // Solve awaiting a parity answer; it is already recorded, so a reload
   // during the prompt keeps the time and simply leaves parity unset.
   const [pendingParity, setPendingParity] = useState<string | null>(null)
+  const typedInput = useRef<HTMLInputElement>(null)
 
   const session = store.sessions.find((s) => s.id === store.activeId) ?? store.sessions[0]
 
@@ -56,6 +57,10 @@ export default function App() {
   }, [store])
 
   useEffect(() => saveSettings(settings), [settings])
+
+  useEffect(() => {
+    if (settings.inputMode === 'typing' && tab === 'timer') typedInput.current?.focus()
+  }, [settings.inputMode, tab, session.id])
 
   const flash = (msg: string) => {
     setToast(msg)
@@ -112,6 +117,9 @@ export default function App() {
     if (ms === null) return
     record(ms)
     setTyped('')
+    // Stay in the field so a session of old times can be entered without
+    // reaching for the mouse between each one.
+    typedInput.current?.focus()
   }
 
   const setPenalty = (id: string, penalty: Penalty) =>
@@ -260,10 +268,12 @@ export default function App() {
           {typing ? (
             <form className="typed" onSubmit={submitTyped}>
               <input
+                ref={typedInput}
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
                 placeholder="1234"
                 aria-label="Enter solve time"
+                inputMode="numeric"
                 autoFocus
               />
               <button type="submit" disabled={parseTime(typed) === null}>
@@ -277,7 +287,11 @@ export default function App() {
           )}
           <p className="hint">
             {typing
-              ? `type 1234 for 12.34s${parseTime(typed) !== null ? ` — ${formatMs(parseTime(typed)!)}` : ''}`
+              ? parseTime(typed) !== null
+                ? formatMs(parseTime(typed)!)
+                : typed.trim() === ''
+                  ? 'type it as it reads: 1234 → 12.34, 12345 → 1:23.45'
+                  : 'not a time'
               : state === 'idle'
                 ? 'hold space to start'
                 : state === 'running'
@@ -437,6 +451,7 @@ export default function App() {
               solves: prev.solves.map((s) => (s.id === pending.id ? { ...s, parity } : s)),
             }))
             setPendingParity(null)
+            if (typing) requestAnimationFrame(() => typedInput.current?.focus())
           }}
         />
       )}
