@@ -1,0 +1,135 @@
+:root {
+  --bg: #0e1116;
+  --panel: #161b22;
+  --line: #262d37;
+  --text: #e6edf3;
+  --dim: #8b949e;
+  --accent: #58a6ff;
+  --ready: #3fb950;
+  --hold: #d29922;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+.app {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.events { display: flex; gap: 6px; }
+
+button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover { border-color: var(--dim); }
+button.active { background: var(--accent); border-color: var(--accent); color: #0e1116; font-weight: 600; }
+button.ghost { background: none; color: var(--dim); }
+button.small { padding: 2px 8px; font-size: 12px; }
+
+.scramble {
+  margin: 28px auto 0;
+  max-width: 700px;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: clamp(15px, 2.4vw, 21px);
+  letter-spacing: 0.02em;
+  color: var(--text);
+  min-height: 2.5em;
+}
+
+.timer {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 200;
+  font-size: clamp(64px, 17vw, 150px);
+  line-height: 1.1;
+  margin: 8px 0 0;
+  transition: color 90ms linear;
+}
+.state-holding .timer { color: var(--hold); }
+.state-ready .timer { color: var(--ready); }
+
+.hint {
+  text-align: center;
+  color: var(--dim);
+  font-size: 13px;
+  margin: 0 0 32px;
+  min-height: 1.2em;
+}
+
+.body {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 16px;
+}
+@media (max-width: 720px) { .body { grid-template-columns: 1fr; } }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.panel h2 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  font-weight: 600;
+}
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; }
+
+.stat {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+.stat:last-child { border-bottom: none; }
+.stat span { color: var(--dim); }
+.stat strong { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+.empty { color: var(--dim); margin: 4px 0; }
+
+.solves { list-style: none; margin: 0; padding: 0; }
+.solves li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+.solves li:last-child { border-bottom: none; }
+.solves .idx { color: var(--dim); width: 34px; font-variant-numeric: tabular-nums; }
+.solves .time { font-variant-numeric: tabular-nums; font-weight: 600; flex: 1; }
+.solves li.latest .time { color: var(--accent); }
+.solves .actions { display: flex; gap: 4px; }
+/* Dim per-button, not on the parent -- a parent opacity would also fade an
+   active +2/DNF badge, which must stay legible. */
+.solves .actions button { padding: 1px 7px; font-size: 12px; color: #5b636d; border-color: transparent; }
+.solves li:hover .actions button { color: var(--text); border-color: var(--line); }
+.solves .actions button.on { background: var(--accent); border-color: var(--accent); color: #0e1116; opacity: 1; }
