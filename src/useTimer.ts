@@ -10,7 +10,7 @@ const HOLD_MS = 300
  * the recorded result is a single subtraction of two performance.now() reads,
  * so a dropped frame can never corrupt a solve.
  */
-export function useTimer(onStop: (elapsedMs: number) => void) {
+export function useTimer(onStop: (elapsedMs: number) => void, enabled = true) {
   const [state, setState] = useState<TimerState>('idle')
   const [display, setDisplay] = useState(0)
 
@@ -48,6 +48,7 @@ export function useTimer(onStop: (elapsedMs: number) => void) {
   }, [set])
 
   useEffect(() => {
+    if (!enabled) return
     const down = (e: KeyboardEvent) => {
       if (e.repeat) return
       // Don't hijack typing in inputs.
@@ -81,7 +82,14 @@ export function useTimer(onStop: (elapsedMs: number) => void) {
       window.clearTimeout(holdTimer.current)
       if (rafRef.current !== undefined) cancelAnimationFrame(rafRef.current)
     }
-  }, [set, start, stop])
+  }, [enabled, set, start, stop])
+
+  useEffect(() => {
+    if (!enabled) {
+      set('idle')
+      setDisplay(0)
+    }
+  }, [enabled, set])
 
   return { state, display }
 }

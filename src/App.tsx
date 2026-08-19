@@ -5,12 +5,17 @@ import { averageOf, best, bestAverage, sessionMean } from './stats'
 import { newScramble } from './scramble'
 import { loadSolves, saveSolves } from './storage'
 import { useTimer } from './useTimer'
+import { DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings } from './settings'
+import { parseTime } from './parseTime'
 
 export default function App() {
   const [event, setEvent] = useState<EventId>('333')
   const [scramble, setScramble] = useState('')
   const [scrambling, setScrambling] = useState(true)
   const [allSolves, setAllSolves] = useState<Solve[]>(() => loadSolves())
+  const [settings, setSettings] = useState<Settings>(() => loadSettings())
+  const [showSettings, setShowSettings] = useState(false)
+  const [typed, setTyped] = useState('')
 
   // Newest first, so stats windows are just slices from the front.
   const solves = useMemo(
@@ -19,6 +24,10 @@ export default function App() {
   )
 
   useEffect(() => saveSolves(allSolves), [allSolves])
+  useEffect(() => saveSettings(settings), [settings])
+
+  const update = <K extends keyof Settings>(key: K, value: Settings[K]) =>
+    setSettings((prev) => ({ ...prev, [key]: value }))
 
   const nextScramble = useCallback((ev: EventId) => {
     setScrambling(true)
@@ -30,14 +39,15 @@ export default function App() {
 
   useEffect(() => nextScramble(event), [event, nextScramble])
 
-  const handleStop = useCallback(
-    (elapsedMs: number) => {
+  /** Single path for recording a solve, whether timed or typed. */
+  const record = useCallback(
+    (timeMs: number) => {
       setAllSolves((prev) => [
         {
           id: crypto.randomUUID(),
           event,
           scramble,
-          timeMs: elapsedMs,
+          timeMs,
           penalty: 'none' as Penalty,
           createdAt: Date.now(),
         },
@@ -48,7 +58,16 @@ export default function App() {
     [event, scramble, nextScramble],
   )
 
-  const { state, display } = useTimer(handleStop)
+  const typing = settings.inputMode === 'typing'
+  const { state, display } = useTimer(record, !typing)
+
+  const submitTyped = (e: React.FormEvent) => {
+    e.preventDefault()
+    const ms = parseTime(typed)
+    if (ms === null) return
+    record(ms)
+    setTyped('')
+  }
 
   const setPenalty = (id: string, penalty: Penalty) =>
     setAllSolves((prev) =>
@@ -83,16 +102,91 @@ export default function App() {
             </button>
           ))}
         </div>
-        <button className="ghost" onClick={() => nextScramble(event)}>
-          new scramble
-        </button>
+        <div className="header-actions">
+          <button className="ghost" onClick={() => nextScramble(event)}>
+            new scramble
+          </button>
+          <button className="ghost" onClick={() => setShowSettings((v) => !v)}>
+            settings
+          </button>
+        </div>
       </header>
+
+      {showSettings && (
+        <section className="panel settings">
+          <div className="panel-head">
+            <h2>settings</h2>
+            <button className="ghost small" onClick={() => setSettings(DEFAULT_SETTINGS)}>
+              reset
+            </button>
+          </div>
+
+          <div className="setting">
+            <div>
+              <strong>Time entry</strong>
+              <p>Use the space-bar stopwatch, or type times in by hand.</p>
+            </div>
+            <div className="seg">
+              <button
+                className={!typing ? 'active' : ''}
+                onClick={() => update('inputMode', 'timer')}
+              >
+                timer
+              </button>
+              <button
+                className={typing ? 'active' : ''}
+                onClick={() => update('inputMode', 'typing')}
+              >
+                typing
+              </button>
+            </div>
+          </div>
+
+          <div className="setting">
+            <div>
+              <strong>Hide time while solving</strong>
+              <p>Shows "solving" instead of a running count. The time still records.</p>
+            </div>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={settings.hideTimeWhileSolving}
+                onChange={(e) => update('hideTimeWhileSolving', e.target.checked)}
+              />
+              <span />
+            </label>
+          </div>
+        </section>
+      )}
 
       <p className="scramble">{scrambling ? 'generating scramble…' : scramble}</p>
 
-      <div className="timer">{formatMs(display)}</div>
+      {typing ? (
+        <form className="typed" onSubmit={submitTyped}>
+          <input
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder="12.34"
+            aria-label="Enter solve time"
+            autoFocus
+          />
+          <button type="submit" disabled={parseTime(typed) === null}>
+            add
+          </button>
+        </form>
+      ) : (
+        <div className="timer">
+          {settings.hideTimeWhileSolving && state === 'running' ? 'solving' : formatMs(display)}
+        </div>
+      )}
       <p className="hint">
-        {state === 'idle' ? 'hold space to start' : state === 'running' ? '' : 'release to go'}
+        {typing
+          ? 'type a time like 12.34 or 1:05.43, then press enter'
+          : state === 'idle'
+            ? 'hold space to start'
+            : state === 'running'
+              ? ''
+              : 'release to go'}
       </p>
 
       <div className="body">
