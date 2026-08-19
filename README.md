@@ -9,13 +9,16 @@ Phase 1 — core timer, local only:
 - WCA scrambles for all 17 official events via [cubing.js](https://js.cubing.net)
 - Hold-space-to-start timing on `performance.now()`
 - +2 / DNF penalties, delete, clear session
-- best, mean, ao5, ao12, best ao5, best ao12
+- best, mean, standard deviation, ao5, ao12, best ao5, best ao12
 - named sessions (up to 20), each bound to an event, so two 3x3 sessions can coexist
 - click any solve for its scramble, date, and penalty controls
 - solves persist in `localStorage`, per session
-- settings: stopwatch or hand-typed entry, hide the time while solving
+- settings: stopwatch or hand-typed entry, hide the time while solving,
+  parity tracking
 - stats tab: solve-time distribution (0.05–1s bins) and a chronological
   trend with a rolling mean overlaid
+- parity tracking on 4x4–7x7: one prompt per solve, a distribution stacked by
+  parity category, and mean/sd per category with the gap to the clean mean
 - import from csTimer: each session becomes a session here, keeping scrambles
   and dates, with the event detected from its scramble type and overridable
 

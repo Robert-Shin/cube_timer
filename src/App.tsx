@@ -12,6 +12,10 @@ import { TrendChart } from './charts/TrendChart'
 import { ImportDialog } from './ImportDialog'
 import { SessionManager } from './SessionManager'
 import { SolveDetail } from './SolveDetail'
+import { ParityPrompt } from './ParityPrompt'
+import { ParityBreakdown } from './ParityBreakdown'
+import { hasParity, type ParityId } from './parity'
+import { stdDev } from './stats'
 
 export default function App() {
   const [store, setStore] = useState<Store>(() => loadStore())
@@ -27,6 +31,9 @@ export default function App() {
   const [bucketMs, setBucketMs] = useState(100)
   const [rollWindow, setRollWindow] = useState(50)
   const [toast, setToast] = useState('')
+  // Solve awaiting a parity answer; it is already recorded, so a reload
+  // during the prompt keeps the time and simply leaves parity unset.
+  const [pendingParity, setPendingParity] = useState<string | null>(null)
 
   const session = store.sessions.find((s) => s.id === store.activeId) ?? store.sessions[0]
 
@@ -68,28 +75,35 @@ export default function App() {
   /** Single path for recording a solve, whether timed or typed. */
   const record = useCallback(
     (timeMs: number) => {
+      const id = crypto.randomUUID()
+      const asking = settings.trackParity && hasParity(session.event)
       setStore((prev) => ({
         ...prev,
         solves: [
           {
-            id: crypto.randomUUID(),
+            id,
             sessionId: session.id,
             scramble,
             timeMs,
             penalty: 'none' as Penalty,
             createdAt: Date.now(),
+            // Events without parity record [] -- definitively none, not
+            // unknown -- so they never show up as untracked.
+            ...(asking ? {} : { parity: [] as ParityId[] }),
           },
           ...prev.solves,
         ],
       }))
+      if (asking) setPendingParity(id)
       nextScramble(session.event)
     },
-    [session.id, session.event, scramble, nextScramble],
+    [session.id, session.event, scramble, nextScramble, settings.trackParity],
   )
 
   const typing = settings.inputMode === 'typing'
   // Modals own the keyboard while open, or space would fire a phantom solve.
-  const modalOpen = showSessions || importing || detailId !== null || showSettings
+  const modalOpen =
+    showSessions || importing || detailId !== null || showSettings || pendingParity !== null
   const { state, display } = useTimer(record, !typing && !modalOpen)
 
   const submitTyped = (e: React.FormEvent) => {
@@ -132,6 +146,8 @@ export default function App() {
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) =>
     setSettings((prev) => ({ ...prev, [key]: value }))
 
+  const parityEvent = hasParity(session.event)
+  const pending = pendingParity ? store.solves.find((s) => s.id === pendingParity) : null
   const detail = detailId ? solves.find((s) => s.id === detailId) : null
   const latest = solves[0]
 
@@ -195,6 +211,24 @@ export default function App() {
                 typing
               </button>
             </div>
+          </div>
+
+          <div className="setting">
+            <div>
+              <strong>Parity tracking</strong>
+              <p>
+                Ask which parities occurred after each solve, on 4x4–7x7. Statistics then split by
+                parity so you can see what each one costs.
+              </p>
+            </div>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={settings.trackParity}
+                onChange={(e) => update('trackParity', e.target.checked)}
+              />
+              <span />
+            </label>
           </div>
 
           <div className="setting">
@@ -269,7 +303,12 @@ export default function App() {
                 </select>
               </label>
             </div>
-            <Histogram solves={solves} bucketMs={bucketMs} />
+            <Histogram
+              solves={solves}
+              bucketMs={bucketMs}
+              splitByParity={parityEvent}
+              event={session.event}
+            />
           </section>
 
           <section className="panel">
@@ -288,6 +327,15 @@ export default function App() {
             </div>
             <TrendChart solves={solves} window={rollWindow} />
           </section>
+
+          {parityEvent && (
+            <section className="panel">
+              <div className="panel-head">
+                <h2>cost of parity</h2>
+              </div>
+              <ParityBreakdown solves={solves} event={session.event} />
+            </section>
+          )}
         </div>
       )}
 
@@ -299,6 +347,7 @@ export default function App() {
           <Stat label="solves" value={String(solves.length)} />
           <Stat label="best" value={fmt(best(solves))} />
           <Stat label="mean" value={fmt(sessionMean(solves))} />
+          <Stat label="std dev" value={fmt(stdDev(solves))} />
           <Stat label="ao5" value={fmt(averageOf(solves, 5))} />
           <Stat label="ao12" value={fmt(averageOf(solves, 12))} />
           <Stat label="best ao5" value={fmt(bestAverage(solves, 5))} />
@@ -363,12 +412,32 @@ export default function App() {
         <SolveDetail
           solve={detail}
           ordinal={solves.length - solves.indexOf(detail)}
+          event={session.event}
           onPenalty={(p) => setPenalty(detail.id, p)}
+          onParity={(parity) =>
+            setStore((prev) => ({
+              ...prev,
+              solves: prev.solves.map((s) => (s.id === detail.id ? { ...s, parity } : s)),
+            }))
+          }
           onDelete={() => {
             deleteSolve(detail.id)
             setDetailId(null)
           }}
           onClose={() => setDetailId(null)}
+        />
+      )}
+      {pending && (
+        <ParityPrompt
+          event={session.event}
+          timeMs={pending.timeMs}
+          onAnswer={(parity) => {
+            setStore((prev) => ({
+              ...prev,
+              solves: prev.solves.map((s) => (s.id === pending.id ? { ...s, parity } : s)),
+            }))
+            setPendingParity(null)
+          }}
         />
       )}
       {toast && <div className="toast">{toast}</div>}

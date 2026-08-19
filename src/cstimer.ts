@@ -183,6 +183,10 @@ export function convertSession(rows: unknown[], sessionId: string): Solve[] {
     out.push({
       id: crypto.randomUUID(),
       sessionId,
+      // csTimer records no parity information, so imported solves come in as
+      // clean. That is an assumption, not a measurement: if the session
+      // actually had parities, the no-parity mean will read slightly slow.
+      parity: [],
       scramble: typeof row[1] === 'string' ? row[1] : '',
       timeMs: raw,
       penalty,

@@ -1,21 +1,34 @@
 import { useMemo, useState } from 'react'
-import type { Solve } from '../types'
+import type { EventId, Solve } from '../types'
 import { histogram } from '../analysis'
 import { formatMs } from '../format'
 import { useWidth } from './useWidth'
 
-const HEIGHT = 260
+const HEIGHT = 280
 const PAD = { top: 12, right: 12, bottom: 34, left: 44 }
 
 /**
- * Distribution of solve times in fixed-width bins. One series, so no legend --
- * the heading names it.
+ * Distribution of solve times in fixed-width bins, optionally stacked by
+ * parity category so the shift each parity causes is visible in place.
  */
-export function Histogram({ solves, bucketMs }: { solves: Solve[]; bucketMs: number }) {
+export function Histogram({
+  solves,
+  bucketMs,
+  splitByParity = false,
+  event,
+}: {
+  solves: Solve[]
+  bucketMs: number
+  splitByParity?: boolean
+  event: EventId
+}) {
   const { ref, width } = useWidth()
   const [hover, setHover] = useState<number | null>(null)
 
-  const buckets = useMemo(() => histogram(solves, bucketMs), [solves, bucketMs])
+  const { buckets, series } = useMemo(
+    () => histogram(solves, bucketMs, splitByParity, event),
+    [solves, bucketMs, splitByParity, event],
+  )
 
   if (buckets.length === 0) {
     return (
@@ -33,23 +46,27 @@ export function Histogram({ solves, bucketMs }: { solves: Solve[]; bucketMs: num
   const x = (i: number) => PAD.left + i * barW
   const y = (c: number) => PAD.top + plotH - (c / maxCount) * plotH
 
-  // Aim for ~6 ticks, snapped to whole buckets.
   const tickEvery = Math.max(1, Math.round(buckets.length / 6))
   const yTicks = niceTicks(maxCount)
   const active = hover !== null ? buckets[hover] : null
+  const barPx = Math.max(0.5, barW - 2)
 
   return (
     <div className="chart" ref={ref}>
+      {series.length > 1 && (
+        <div className="legend">
+          {series.map((s, i) => (
+            <span key={s.key}>
+              <i className={`swatch box s${i + 1}`} /> {s.label} ({s.count})
+            </span>
+          ))}
+        </div>
+      )}
+
       <svg width={width} height={HEIGHT} role="img" aria-label="Distribution of solve times">
         {yTicks.map((t) => (
           <g key={t}>
-            <line
-              x1={PAD.left}
-              x2={PAD.left + plotW}
-              y1={y(t)}
-              y2={y(t)}
-              className="grid"
-            />
+            <line x1={PAD.left} x2={PAD.left + plotW} y1={y(t)} y2={y(t)} className="grid" />
             <text x={PAD.left - 8} y={y(t)} className="tick" textAnchor="end" dy="0.32em">
               {t}
             </text>
@@ -57,20 +74,45 @@ export function Histogram({ solves, bucketMs }: { solves: Solve[]; bucketMs: num
         ))}
 
         {buckets.map((b, i) => {
-          const h = (b.count / maxCount) * plotH
+          if (b.count === 0) return null
+
+          // Unsplit: one bar. Split: segments stacked from the baseline up,
+          // in the shared series order so colors mean the same thing in
+          // every bin.
+          const segments =
+            series.length > 1
+              ? series.map((s) => ({ key: s.key, n: b.parts[s.key] ?? 0 }))
+              : [{ key: 'all', n: b.count }]
+
+          let acc = 0
           return (
-            <rect
+            <g
               key={b.startMs}
-              x={x(i)}
-              y={y(b.count)}
-              // 2px surface gap between bars; never negative on narrow bins.
-              width={Math.max(0.5, barW - 2)}
-              height={Math.max(0, h)}
-              rx={Math.min(4, barW / 2)}
-              className={hover === i ? 'bar bar-on' : 'bar'}
               onMouseEnter={() => setHover(i)}
               onMouseLeave={() => setHover(null)}
-            />
+            >
+              {/* Full-height hit area: thin bars are hard to hover. */}
+              <rect x={x(i)} y={PAD.top} width={barW} height={plotH} fill="transparent" />
+              {segments.map((seg, si) => {
+                if (seg.n === 0) return null
+                const h = (seg.n / maxCount) * plotH
+                const yTop = PAD.top + plotH - ((acc + seg.n) / maxCount) * plotH
+                acc += seg.n
+                return (
+                  <rect
+                    key={seg.key}
+                    x={x(i)}
+                    y={yTop}
+                    width={barPx}
+                    // 2px surface gap between stacked segments, but never
+                    // shrink a segment out of existence.
+                    height={Math.max(0.5, h - (si > 0 ? 2 : 0))}
+                    rx={Math.min(4, barW / 2)}
+                    className={`bar s${series.length > 1 ? si + 1 : 1} ${hover === i ? 'bar-on' : ''}`}
+                  />
+                )
+              })}
+            </g>
           )
         })}
 
@@ -97,18 +139,25 @@ export function Histogram({ solves, bucketMs }: { solves: Solve[]; bucketMs: num
         />
       </svg>
 
-      {active && (
+      {active && active.count > 0 && (
         <div
           className="tooltip"
-          style={{
-            left: Math.min(width - 130, Math.max(0, x(hover!) + barW / 2 - 65)),
-            top: 4,
-          }}
+          style={{ left: Math.min(width - 150, Math.max(0, x(hover!) + barW / 2 - 75)), top: 4 }}
         >
-          <strong>{active.count}</strong> {active.count === 1 ? 'solve' : 'solves'}
+          <strong>
+            {active.count} {active.count === 1 ? 'solve' : 'solves'}
+          </strong>
           <span>
             {formatMs(active.startMs)} – {formatMs(active.startMs + active.widthMs)}
           </span>
+          {series.length > 1 &&
+            series.map((s, i) =>
+              active.parts[s.key] ? (
+                <span key={s.key} className="tip-row">
+                  <i className={`swatch box s${i + 1}`} /> {s.label}: {active.parts[s.key]}
+                </span>
+              ) : null,
+            )}
         </div>
       )}
     </div>

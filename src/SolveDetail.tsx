@@ -1,21 +1,33 @@
-import type { Penalty, Solve } from './types'
+import type { EventId, Penalty, Solve } from './types'
 import { effectiveMs } from './types'
 import { formatMs } from './format'
+import { parityTypes, sortParity, type ParityId } from './parity'
 
 /** Full record of one solve, including the scramble it was set with. */
 export function SolveDetail({
   solve,
   ordinal,
+  event,
   onPenalty,
+  onParity,
   onDelete,
   onClose,
 }: {
   solve: Solve
   ordinal: number
+  event: EventId
   onPenalty: (penalty: Penalty) => void
+  onParity: (parity: ParityId[]) => void
   onDelete: () => void
   onClose: () => void
 }) {
+  const types = parityTypes(event)
+  const current = solve.parity ?? []
+  const toggle = (id: ParityId) =>
+    onParity(
+      sortParity(current.includes(id) ? current.filter((p) => p !== id) : [...current, id]),
+    )
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
@@ -37,6 +49,31 @@ export function SolveDetail({
           <p className="detail-scramble">{solve.scramble}</p>
         ) : (
           <p className="note">no scramble recorded for this solve</p>
+        )}
+
+        {types.length > 0 && (
+          <>
+            <h3 className="detail-label">
+              parity{solve.parity === undefined ? ' (not recorded)' : ''}
+            </h3>
+            <div className="seg">
+              {types.map((t) => (
+                <button
+                  key={t.id}
+                  className={current.includes(t.id) ? 'active' : ''}
+                  onClick={() => toggle(t.id)}
+                >
+                  {t.label}
+                </button>
+              ))}
+              <button
+                className={solve.parity !== undefined && current.length === 0 ? 'active' : ''}
+                onClick={() => onParity([])}
+              >
+                none
+              </button>
+            </div>
+          </>
         )}
 
         <div className="modal-actions">

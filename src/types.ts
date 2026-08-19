@@ -44,12 +44,20 @@ export interface Session {
   createdAt: number
 }
 
+import type { ParityId } from './parity'
+
 export type Penalty = 'none' | 'plus2' | 'dnf'
 
 export interface Solve {
   id: string
   sessionId: string
   scramble: string
+  /**
+   * Which parities occurred. `[]` means none; `undefined` means the solve was
+   * recorded without parity tracking, which is different from "none" and is
+   * kept out of parity statistics rather than counted as clean.
+   */
+  parity?: ParityId[]
   /** Raw stopwatch time in ms, before any penalty is applied. */
   timeMs: number
   penalty: Penalty

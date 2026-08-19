@@ -5,11 +5,14 @@ export interface Settings {
   inputMode: InputMode
   /** Hide the running count while solving; the time still records normally. */
   hideTimeWhileSolving: boolean
+  /** Ask which parities occurred after each solve, on events that have them. */
+  trackParity: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   inputMode: 'timer',
   hideTimeWhileSolving: false,
+  trackParity: false,
 }
 
 const KEY = 'cube-timer.settings.v1'
