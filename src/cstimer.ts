@@ -23,24 +23,68 @@ function readPenalty(flag: number, timeMs: number): { penalty: Penalty; raw: num
   return { penalty: 'none', raw: timeMs }
 }
 
-/** Maps a csTimer scramble type to one of our events, or null if unsupported. */
-function eventFromScrType(scrType: string | undefined, name: string): EventId | null {
-  const s = (scrType || '').toLowerCase()
-  if (s.startsWith('222')) return '222'
-  if (s.startsWith('444')) return '444'
-  if (s.startsWith('333')) {
-    // One-handed, blindfolded etc. are still 3x3 scrambles but different events;
-    // only plain 3x3 maps cleanly onto what we support.
-    return s === '333' || s === '333wca' ? '333' : null
-  }
-  if (s) return null // 555, megaminx, clock, ... -- not ours
+/**
+ * csTimer scramble type -> WCA event. Its ids encode the puzzle plus a
+ * generator variant ("222so" = 2x2 optimal, "444wca" = 4x4 WCA), so the
+ * prefix is what identifies the puzzle.
+ */
+const SCR_TYPES: [RegExp, EventId][] = [
+  [/^333(ni|bldni)/, '333bf'],
+  [/^333fm/, '333fm'],
+  [/^333oh/, '333oh'],
+  [/^333mbf|^r3ni/, '333mbf'],
+  [/^333/, '333'],
+  [/^222/, '222'],
+  [/^444bld|^444ni/, '444bf'],
+  [/^444/, '444'],
+  [/^555bld|^555ni/, '555bf'],
+  [/^555/, '555'],
+  [/^666/, '666'],
+  [/^777/, '777'],
+  [/^clk/, 'clock'],
+  [/^mgm|^minx/, 'minx'],
+  [/^pyr/, 'pyram'],
+  [/^skb/, 'skewb'],
+  [/^sq1|^sqrs/, 'sq1'],
+]
 
-  // No scrType means csTimer's default, which is 3x3. Sanity-check the name,
-  // since users rename sessions freely.
+/** Session names people actually use, for when scrType is absent. */
+const NAME_HINTS: [RegExp, EventId][] = [
+  [/\bmulti|\bmbld/, '333mbf'],
+  [/3\s*bld|333ni|\bbld\b/, '333bf'],
+  [/4\s*bld/, '444bf'],
+  [/5\s*bld/, '555bf'],
+  [/\bfmc|fewest/, '333fm'],
+  [/\boh\b|one.?hand/, '333oh'],
+  [/2x2|\b222\b/, '222'],
+  [/4x4|\b444\b/, '444'],
+  [/5x5|\b555\b/, '555'],
+  [/6x6|\b666\b/, '666'],
+  [/7x7|\b777\b/, '777'],
+  [/clock/, 'clock'],
+  [/mega|minx/, 'minx'],
+  [/pyra/, 'pyram'],
+  [/skewb/, 'skewb'],
+  [/sq.?1|square/, 'sq1'],
+  [/3x3|\b333\b/, '333'],
+]
+
+/** Maps a csTimer session to a WCA event, or null when we can't tell. */
+function eventFromScrType(scrType: string | undefined, name: string): EventId | null {
   const n = name.toLowerCase()
-  if (n.includes('2x2')) return '222'
-  if (n.includes('4x4')) return '444'
-  if (/5x5|6x6|7x7|mega|pyra|skewb|sq1|clock|bld|relay|oh/.test(n)) return null
+  // A relay session borrows a real generator (a 2-5 relay scrambles with
+  // 555wca), so the name has to override the scramble type here.
+  if (/relay/.test(n)) return null
+
+  const s = (scrType || '').toLowerCase()
+  if (s) {
+    for (const [re, event] of SCR_TYPES) if (re.test(s)) return event
+    return null // an unrecognised generator -- custom types, etc.
+  }
+
+  // No scrType means csTimer's default of 3x3, but users rename sessions and
+  // reuse them, so let an explicit name in the title win over that default.
+  for (const [re, event] of NAME_HINTS) if (re.test(n)) return event
   return '333'
 }
 
@@ -122,8 +166,12 @@ export function parseCstimerExport(text: string): ParsedCstimer {
   return { sessions, raw }
 }
 
-/** Converts one session's rows into our Solve shape under the chosen event. */
-export function convertSession(rows: unknown[], event: EventId): Solve[] {
+/**
+ * Converts one csTimer session's rows into our Solve shape, filed under the
+ * given session. The original scramble and timestamp are preserved, so an
+ * imported solve can be inspected exactly like one timed here.
+ */
+export function convertSession(rows: unknown[], sessionId: string): Solve[] {
   const out: Solve[] = []
   for (const row of rows) {
     if (!Array.isArray(row) || !Array.isArray(row[0])) continue
@@ -134,7 +182,7 @@ export function convertSession(rows: unknown[], event: EventId): Solve[] {
     const stamp = Number(row[3])
     out.push({
       id: crypto.randomUUID(),
-      event,
+      sessionId,
       scramble: typeof row[1] === 'string' ? row[1] : '',
       timeMs: raw,
       penalty,
