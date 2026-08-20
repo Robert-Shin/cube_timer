@@ -1,4 +1,5 @@
-import { EVENTS, MAX_SESSIONS, eventName, type EventId, type Session, type Solve } from './types'
+import { EVENTS, MAX_SESSIONS, eventName, type EventId, type Session, type Solve, type Synced } from './types'
+import { now, tombstone } from './sync/stamp'
 
 const SOLVES = 'cube-timer.solves.v2'
 const SESSIONS = 'cube-timer.sessions.v1'
@@ -13,7 +14,17 @@ export interface Store {
 }
 
 function newSession(name: string, event: EventId): Session {
-  return { id: crypto.randomUUID(), name, event, createdAt: Date.now() }
+  const at = now()
+  return { id: crypto.randomUUID(), name, event, createdAt: at, updatedAt: at }
+}
+
+/**
+ * Fills in sync fields on rows stored before sync existed. Their `createdAt`
+ * becomes their `updatedAt`, which is truthful -- creation was the last time
+ * they changed -- and keeps them older than anything edited since.
+ */
+function normalize<T extends Synced & { createdAt: number }>(rows: T[]): T[] {
+  return rows.map((r) => (r.updatedAt === undefined ? { ...r, updatedAt: r.createdAt } : r))
 }
 
 /**
@@ -27,8 +38,8 @@ export function loadStore(): Store {
   if (sessions && sessions.length > 0) {
     const activeId = localStorage.getItem(ACTIVE) ?? ''
     return {
-      sessions,
-      solves: solves ?? [],
+      sessions: normalize(sessions),
+      solves: normalize(solves ?? []),
       // A stored id can point at a deleted session; fall back to the first.
       activeId: sessions.some((s) => s.id === activeId) ? activeId : sessions[0].id,
     }
@@ -61,7 +72,9 @@ function migrateLegacy(legacy: (Solve & { event?: EventId })[]): Store {
     if (!found) continue
     const session = newSession(eventName(event), event)
     sessions.push(session)
-    for (const s of found) solves.push({ ...s, sessionId: session.id })
+    for (const s of found) {
+      solves.push({ ...s, sessionId: session.id, updatedAt: s.createdAt })
+    }
   }
 
   if (sessions.length === 0) sessions.push(newSession('3x3', '333'))
@@ -99,13 +112,19 @@ export function createSession(store: Store, name: string, event: EventId): Store
   return { ...store, sessions: [...store.sessions, session], activeId: session.id }
 }
 
-/** Deleting a session deletes its solves -- they have nowhere else to live. */
+/**
+ * Deleting a session tombstones it and its solves -- they have nowhere else
+ * to live. Tombstones rather than removal, so the delete propagates instead
+ * of being undone by a device that still holds the rows.
+ */
 export function deleteSession(store: Store, id: string): Store {
-  if (store.sessions.length <= 1) return store
-  const sessions = store.sessions.filter((s) => s.id !== id)
+  const live = store.sessions.filter((s) => !s.deleted)
+  if (live.length <= 1) return store
+  const sessions = store.sessions.map((s) => (s.id === id ? tombstone(s) : s))
+  const remaining = sessions.filter((s) => !s.deleted)
   return {
     sessions,
-    solves: store.solves.filter((s) => s.sessionId !== id),
-    activeId: store.activeId === id ? sessions[0].id : store.activeId,
+    solves: store.solves.map((s) => (s.sessionId === id ? tombstone(s) : s)),
+    activeId: store.activeId === id ? remaining[0].id : store.activeId,
   }
 }

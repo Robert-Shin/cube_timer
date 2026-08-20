@@ -70,6 +70,7 @@ export function ImportDialog({
         name: row.name.trim() || s.name,
         event: row.event,
         createdAt: Date.now(),
+        updatedAt: Date.now(),
       }
       sessions.push(session)
       solves.push(...convertSession(parsed.raw[s.key], session.id))

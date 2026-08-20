@@ -36,7 +36,18 @@ export function eventName(id: EventId): string {
 /** csTimer caps sessions at a similar count; 20 keeps the picker usable. */
 export const MAX_SESSIONS = 20
 
-export interface Session {
+/** Fields every synced row carries, in addition to its own data. */
+export interface Synced {
+  /** Local clock, ms. Drives last-write-wins reconciliation. */
+  updatedAt: number
+  /**
+   * Tombstone. Deletes are soft because a row removed outright is invisible
+   * to another device, which would then resurrect it on the next pull.
+   */
+  deleted?: boolean
+}
+
+export interface Session extends Synced {
   id: string
   name: string
   /** Which event this session scrambles for. Changeable after the fact. */
@@ -61,7 +72,7 @@ import type { ParityId } from './parity'
 
 export type Penalty = 'none' | 'plus2' | 'dnf'
 
-export interface Solve {
+export interface Solve extends Synced {
   id: string
   sessionId: string
   scramble: string

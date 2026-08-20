@@ -33,8 +33,31 @@ trend graphs, time distributions, per-session comparison (phase 3).
 
 ```bash
 npm install
-npm run dev
+npm run dev      # http://localhost:5173
+npm test         # unit tests
+npm run typecheck
 ```
+
+## Cloud sync (optional)
+
+The app is local-first: it works fully with no account and no network, storing
+solves in `localStorage`. Signing in adds cross-device sync and takes your
+existing local solves with you.
+
+To enable it, create a [Supabase](https://supabase.com) project, then:
+
+1. Run `supabase/schema.sql` in the dashboard's SQL Editor. It creates two
+   tables with Row Level Security, which is what keeps one user's solves
+   invisible to another.
+2. Under **Authentication → Providers**, enable **Email**.
+3. Under **Authentication → URL Configuration**, add your dev and production
+   origins to **Redirect URLs**.
+4. Copy `.env.example` to `.env.local` and fill in the project URL and anon
+   key from **Project Settings → API**.
+
+The anon key belongs in the browser bundle — it identifies the project, not a
+user, and RLS protects the data. The `service_role` key must never be used
+here. With the variables unset, the app runs local-only and hides sign-in.
 
 ## Controls
 

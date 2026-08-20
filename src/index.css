@@ -732,3 +732,30 @@ kbd {
   background: var(--accent);
   flex-shrink: 0;
 }
+
+/* ---- auth and sync ---------------------------------------------------- */
+.auth-form { display: flex; gap: 8px; margin: 12px 0 4px; }
+.auth-form input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  padding: 8px 10px;
+}
+.auth-form input:focus { outline: none; border-color: var(--accent); }
+
+.sync-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--dim);
+}
+.sync-dot.idle { background: var(--s3); }
+.sync-dot.syncing { background: var(--s4); }
+.sync-dot.error { background: var(--danger); }

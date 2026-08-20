@@ -191,6 +191,8 @@ export function convertSession(rows: unknown[], sessionId: string): Solve[] {
       timeMs: raw,
       penalty,
       createdAt: Number.isFinite(stamp) && stamp > 0 ? stamp * 1000 : Date.now(),
+      // Imported now, so this is genuinely when the row last changed.
+      updatedAt: Date.now(),
     })
   }
   return out

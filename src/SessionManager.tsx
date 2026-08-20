@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { EVENTS, MAX_SESSIONS, SESSION_COLORS, type EventId, type Session } from './types'
 import type { Store } from './storage'
 import { parseTime } from './parseTime'
+import { touch, tombstone } from './sync/stamp'
 import { formatMs } from './format'
 
 /**
@@ -23,12 +24,17 @@ export function SessionManager({
   const [event, setEvent] = useState<EventId>('333')
   const [confirming, setConfirming] = useState<string | null>(null)
 
-  const full = store.sessions.length >= MAX_SESSIONS
+  // Tombstoned sessions still sit in the store; they are not shown and do
+  // not consume a slot.
+  const live = store.sessions.filter((s) => !s.deleted)
+  const full = live.length >= MAX_SESSIONS
 
+  // Every edit bumps updatedAt, or the change would lose the next
+  // reconciliation and silently revert.
   const patch = (id: string, fields: Partial<Session>) =>
     onChange({
       ...store,
-      sessions: store.sessions.map((s) => (s.id === id ? { ...s, ...fields } : s)),
+      sessions: store.sessions.map((s) => (s.id === id ? touch(s, fields) : s)),
     })
 
   const add = () => {
@@ -38,17 +44,22 @@ export function SessionManager({
       name: name.trim() || EVENTS.find((e) => e.id === event)!.name,
       event,
       createdAt: Date.now(),
+      updatedAt: Date.now(),
     }
     onChange({ ...store, sessions: [...store.sessions, session], activeId: session.id })
     setName('')
   }
 
   const remove = (id: string) => {
-    const sessions = store.sessions.filter((s) => s.id !== id)
+    if (live.length <= 1) return
+    // Tombstones, not removal: a row deleted outright is invisible to another
+    // device, which would resurrect it on the next pull.
+    const sessions = store.sessions.map((s) => (s.id === id ? tombstone(s) : s))
+    const remaining = sessions.filter((s) => !s.deleted)
     onChange({
       sessions,
-      solves: store.solves.filter((s) => s.sessionId !== id),
-      activeId: store.activeId === id ? sessions[0].id : store.activeId,
+      solves: store.solves.map((s) => (s.sessionId === id ? tombstone(s) : s)),
+      activeId: store.activeId === id ? remaining[0].id : store.activeId,
     })
     setConfirming(null)
   }
@@ -64,7 +75,7 @@ export function SessionManager({
         </div>
 
         <div className="session-list">
-          {store.sessions.map((s) => (
+          {live.map((s) => (
             <div key={s.id} className="session-row">
               <input
                 className="name-input"
@@ -115,8 +126,8 @@ export function SessionManager({
               ) : (
                 <button
                   className="ghost small"
-                  disabled={store.sessions.length <= 1}
-                  title={store.sessions.length <= 1 ? 'the last session cannot be deleted' : ''}
+                  disabled={live.length <= 1}
+                  title={live.length <= 1 ? 'the last session cannot be deleted' : ''}
                   onClick={() => setConfirming(s.id)}
                 >
                   delete
@@ -146,7 +157,7 @@ export function SessionManager({
           </button>
         </div>
         <p className="note">
-          {store.sessions.length} of {MAX_SESSIONS} sessions
+          {live.length} of {MAX_SESSIONS} sessions
           {full ? ' — delete one to add another' : ''}
         </p>
       </div>

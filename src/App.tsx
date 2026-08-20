@@ -7,6 +7,11 @@ import { loadStore, save, type Store } from './storage'
 import { useTimer } from './useTimer'
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings } from './settings'
 import { parseTime } from './parseTime'
+import { touch, tombstone } from './sync/stamp'
+import { visible } from './sync/merge'
+import { useSync } from './sync/engine'
+import { AuthPanel } from './AuthPanel'
+import { syncConfigured } from './supabase'
 import { Histogram } from './charts/Histogram'
 import { PracticeCalendar } from './charts/PracticeCalendar'
 import { TrendChart } from './charts/TrendChart'
@@ -34,30 +39,38 @@ export default function App() {
   const [showBand, setShowBand] = useState(true)
   const [calendarScope, setCalendarScope] = useState<'session' | 'all'>('session')
   const [toast, setToast] = useState('')
+  const [showAuth, setShowAuth] = useState(false)
   // Solve awaiting a parity answer; it is already recorded, so a reload
   // during the prompt keeps the time and simply leaves parity unset.
   const [pendingParity, setPendingParity] = useState<string | null>(null)
   const typedInput = useRef<HTMLInputElement>(null)
 
-  const session = store.sessions.find((s) => s.id === store.activeId) ?? store.sessions[0]
+  // Tombstoned rows stay in the store so their deletion can propagate, but
+  // they must never reach the UI or the statistics.
+  const liveSessions = useMemo(() => visible(store.sessions), [store.sessions])
+  const liveSolves = useMemo(() => visible(store.solves), [store.solves])
+
+  const session = liveSessions.find((s) => s.id === store.activeId) ?? liveSessions[0]
 
   // Newest first, so stats windows are just slices from the front.
   const solves = useMemo(
-    () => store.solves.filter((s) => s.sessionId === session.id),
-    [store.solves, session.id],
+    () => liveSolves.filter((s) => s.sessionId === session.id),
+    [liveSolves, session.id],
   )
 
   const counts = useMemo(() => {
     const out: Record<string, number> = {}
-    for (const s of store.solves) out[s.sessionId] = (out[s.sessionId] ?? 0) + 1
+    for (const s of liveSolves) out[s.sessionId] = (out[s.sessionId] ?? 0) + 1
     return out
-  }, [store.solves])
+  }, [liveSolves])
 
   useEffect(() => {
     if (!save(store) && store.solves.length > 0) {
       setToast("couldn't save — browser storage is full")
     }
   }, [store])
+
+  const sync = useSync(store, setStore)
 
   useEffect(() => saveSettings(settings), [settings])
 
@@ -102,6 +115,7 @@ export default function App() {
             timeMs,
             penalty: 'none' as Penalty,
             createdAt: Date.now(),
+            updatedAt: Date.now(),
             // Events without parity record [] -- definitively none, not
             // unknown -- so they never show up as untracked.
             ...(asking ? {} : { parity: [] as ParityId[] }),
@@ -118,7 +132,12 @@ export default function App() {
   const typing = settings.inputMode === 'typing'
   // Modals own the keyboard while open, or space would fire a phantom solve.
   const modalOpen =
-    showSessions || importing || detailId !== null || showSettings || pendingParity !== null
+    showSessions ||
+    importing ||
+    detailId !== null ||
+    showSettings ||
+    showAuth ||
+    pendingParity !== null
   const { state, display } = useTimer(record, !typing && !modalOpen)
 
   const submitTyped = (e: React.FormEvent) => {
@@ -135,17 +154,20 @@ export default function App() {
   const setPenalty = (id: string, penalty: Penalty) =>
     setStore((prev) => ({
       ...prev,
-      solves: prev.solves.map((s) => (s.id === id ? { ...s, penalty } : s)),
+      solves: prev.solves.map((s) => (s.id === id ? touch(s, { penalty }) : s)),
     }))
 
   const deleteSolve = (id: string) =>
-    setStore((prev) => ({ ...prev, solves: prev.solves.filter((s) => s.id !== id) }))
+    setStore((prev) => ({
+      ...prev,
+      solves: prev.solves.map((s) => (s.id === id ? tombstone(s) : s)),
+    }))
 
   const clearSession = () => {
     if (solves.length && confirm(`Delete all ${solves.length} solves in "${session.name}"?`))
       setStore((prev) => ({
         ...prev,
-        solves: prev.solves.filter((s) => s.sessionId !== session.id),
+        solves: prev.solves.map((s) => (s.sessionId === session.id ? tombstone(s) : s)),
       }))
   }
 
@@ -169,7 +191,7 @@ export default function App() {
   const goal = session.goalMs ?? suggestGoal(solves)
   const subX = goal !== null ? subXRate(solves, goal) : null
   const parityEvent = hasParity(session.event)
-  const pending = pendingParity ? store.solves.find((s) => s.id === pendingParity) : null
+  const pending = pendingParity ? liveSolves.find((s) => s.id === pendingParity) : null
   const detail = detailId ? solves.find((s) => s.id === detailId) : null
   const latest = solves[0]
 
@@ -192,7 +214,7 @@ export default function App() {
             onChange={(e) => setStore((prev) => ({ ...prev, activeId: e.target.value }))}
             aria-label="Session"
           >
-            {store.sessions.map((s) => (
+            {liveSessions.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name} · {eventName(s.event)} ({counts[s.id] ?? 0})
               </option>
@@ -215,6 +237,17 @@ export default function App() {
           <button className="ghost" onClick={() => setImporting(true)}>
             import
           </button>
+          {syncConfigured && (
+            <button className="ghost" onClick={() => setShowAuth(true)}>
+              {sync.email ? (
+                <>
+                  <i className={`sync-dot ${sync.state}`} /> account
+                </>
+              ) : (
+                'sign in'
+              )}
+            </button>
+          )}
           <button className="ghost" onClick={() => setShowSettings((v) => !v)}>
             settings
           </button>
@@ -412,7 +445,7 @@ export default function App() {
                 </button>
               </div>
             </div>
-            <PracticeCalendar solves={calendarScope === 'all' ? store.solves : solves} />
+            <PracticeCalendar solves={calendarScope === 'all' ? liveSolves : solves} />
           </section>
 
           {parityEvent && (
@@ -497,7 +530,7 @@ export default function App() {
       )}
       {importing && (
         <ImportDialog
-          slotsLeft={MAX_SESSIONS - store.sessions.length}
+          slotsLeft={MAX_SESSIONS - liveSessions.length}
           onImport={handleImport}
           onClose={() => setImporting(false)}
         />
@@ -511,7 +544,7 @@ export default function App() {
           onParity={(parity) =>
             setStore((prev) => ({
               ...prev,
-              solves: prev.solves.map((s) => (s.id === detail.id ? { ...s, parity } : s)),
+              solves: prev.solves.map((s) => (s.id === detail.id ? touch(s, { parity }) : s)),
             }))
           }
           onDelete={() => {
@@ -528,11 +561,23 @@ export default function App() {
           onAnswer={(parity) => {
             setStore((prev) => ({
               ...prev,
-              solves: prev.solves.map((s) => (s.id === pending.id ? { ...s, parity } : s)),
+              solves: prev.solves.map((s) => (s.id === pending.id ? touch(s, { parity }) : s)),
             }))
             setPendingParity(null)
             if (typing) requestAnimationFrame(() => typedInput.current?.focus())
           }}
+        />
+      )}
+      {showAuth && (
+        <AuthPanel
+          state={sync.state}
+          email={sync.email}
+          error={sync.error}
+          lastSyncedAt={sync.lastSyncedAt}
+          onSignIn={sync.signIn}
+          onSignOut={sync.signOut}
+          onSyncNow={sync.syncNow}
+          onClose={() => setShowAuth(false)}
         />
       )}
       {toast && <div className="toast">{toast}</div>}
