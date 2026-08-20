@@ -50,10 +50,14 @@ export function useTimer(onStop: (elapsedMs: number) => void, enabled = true) {
   useEffect(() => {
     if (!enabled) return
     const down = (e: KeyboardEvent) => {
-      if (e.repeat) return
       // Don't hijack typing in inputs.
       const el = e.target as HTMLElement | null
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
+
+      // Held space auto-repeats, and every repeat scrolls the page unless it
+      // is cancelled too -- so preventDefault comes before the repeat guard.
+      if (e.code === 'Space') e.preventDefault()
+      if (e.repeat) return
 
       if (stateRef.current === 'running') {
         e.preventDefault()
@@ -61,8 +65,10 @@ export function useTimer(onStop: (elapsedMs: number) => void, enabled = true) {
         return
       }
       if (e.code !== 'Space' || stateRef.current !== 'idle') return
-      e.preventDefault()
       set('holding')
+      // Clear the previous solve as soon as the hold begins, so the next
+      // scramble is never read against a stale time.
+      setDisplay(0)
       holdTimer.current = window.setTimeout(() => set('ready'), HOLD_MS)
     }
 
