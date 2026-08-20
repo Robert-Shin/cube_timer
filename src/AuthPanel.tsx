@@ -2,6 +2,18 @@ import { useState } from 'react'
 import type { SyncState } from './sync/engine'
 
 /** Sign-in and sync status. Hidden entirely when sync is not configured. */
+/**
+ * Supabase's built-in mailer allows only a couple of messages an hour, so a
+ * shared link hits this often. The raw message is accurate but reads like a
+ * fault in the app; say what happened and that nothing was lost.
+ */
+function friendlyError(message: string): string {
+  if (/rate limit|too many/i.test(message)) {
+    return 'Too many sign-in emails have been sent recently. Try again in an hour — your solves are saved on this device either way.'
+  }
+  return message
+}
+
 export function AuthPanel({
   state,
   email,
@@ -33,7 +45,7 @@ export function AuthPanel({
     setFailed(null)
     const { error: e2 } = await onSignIn(address.trim())
     setSending(false)
-    if (e2) setFailed(e2)
+    if (e2) setFailed(friendlyError(e2))
     else setSent(true)
   }
 
@@ -89,6 +101,10 @@ export function AuthPanel({
             <p className="note">
               Sign in to keep your solves across devices. No password — we email you a link.
               Everything you have recorded so far comes with you.
+            </p>
+            <p className="note">
+              Sign-in is still limited while this is in testing, so the email may not arrive. The
+              timer works fully without an account; your solves are saved in this browser.
             </p>
             <form className="auth-form" onSubmit={submit}>
               <input
