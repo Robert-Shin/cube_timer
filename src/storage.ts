@@ -1,5 +1,6 @@
 import { EVENTS, MAX_SESSIONS, eventName, type EventId, type Session, type Solve, type Synced } from './types'
 import { now, tombstone } from './sync/stamp'
+import { newestFirst } from './sync/merge'
 
 const SOLVES = 'cube-timer.solves.v2'
 const SESSIONS = 'cube-timer.sessions.v1'
@@ -39,7 +40,10 @@ export function loadStore(): Store {
     const activeId = localStorage.getItem(ACTIVE) ?? ''
     return {
       sessions: normalize(sessions),
-      solves: normalize(solves ?? []),
+      // Sorted on the way in, not trusted: a store written by a version that
+      // merged a sync pull without re-sorting is still on disk, and would
+      // otherwise stay reversed forever.
+      solves: newestFirst(normalize(solves ?? [])),
       // A stored id can point at a deleted session; fall back to the first.
       activeId: sessions.some((s) => s.id === activeId) ? activeId : sessions[0].id,
     }

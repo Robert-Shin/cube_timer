@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dirtyRows, mergeRows, visible } from './merge'
+import { dirtyRows, mergeRows, newestFirst, visible } from './merge'
 
 const row = (id: string, updatedAt: number, extra: Record<string, unknown> = {}) =>
   ({ id, updatedAt, ...extra }) as never
@@ -61,5 +61,22 @@ describe('visible', () => {
     const rows = [row('a', 1), row('b', 2, { deleted: true })]
     expect(ids(visible(rows))).toEqual(['a@1'])
     expect(rows).toHaveLength(2)
+  })
+})
+
+describe('newestFirst', () => {
+  const solve = (id: string, createdAt: number) => ({ id, updatedAt: 0, createdAt })
+
+  it('orders by createdAt, newest first', () => {
+    const out = newestFirst([solve('old', 100), solve('new', 300), solve('mid', 200)])
+    expect(out.map((s) => s.id)).toEqual(['new', 'mid', 'old'])
+  })
+
+  it('restores the invariant after a merge appends remote rows in server order', () => {
+    // A fresh device pulls everything: the local side is empty, so every row
+    // arrives in the order the server returned it -- oldest first.
+    const remote = [solve('a', 100), solve('b', 200), solve('c', 300)]
+    const merged = mergeRows([], remote)
+    expect(newestFirst(merged).map((s) => s.id)).toEqual(['c', 'b', 'a'])
   })
 })

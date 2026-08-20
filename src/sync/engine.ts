@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, syncConfigured } from '../supabase'
 import type { Store } from '../storage'
-import { mergeRows, dirtyRows } from './merge'
+import { mergeRows, dirtyRows, newestFirst } from './merge'
 import { rowToSession, rowToSolve, sessionToRow, solveToRow } from './rows'
 
 export type SyncState = 'disabled' | 'signed-out' | 'idle' | 'syncing' | 'error'
@@ -108,7 +108,7 @@ export function useSync(store: Store, applyRemote: (next: Store) => void) {
         const current = storeRef.current
         const merged = {
           sessions: mergeRows(current.sessions, pulledSessions),
-          solves: mergeRows(current.solves, pulledSolves),
+          solves: newestFirst(mergeRows(current.solves, pulledSolves)),
           activeId: current.activeId,
         }
         // A pull can arrive for a session this device has never seen; make

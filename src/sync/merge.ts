@@ -25,6 +25,18 @@ export function mergeRows<T extends Row>(local: T[], remote: T[]): T[] {
   return [...byId.values()]
 }
 
+/**
+ * Restores the newest-first order the UI and the statistics depend on.
+ *
+ * mergeRows is deliberately order-agnostic -- it unions by id, so remote-only
+ * rows land wherever the server happened to return them. Every caller that
+ * puts rows back into the store must re-establish the invariant, or ao5 is
+ * computed from the oldest five solves instead of the newest five.
+ */
+export function newestFirst<T extends Row & { createdAt: number }>(rows: T[]): T[] {
+  return [...rows].sort((a, b) => b.createdAt - a.createdAt)
+}
+
 /** Rows changed since the last successful push. */
 export function dirtyRows<T extends Row>(rows: T[], since: number): T[] {
   return rows.filter((r) => r.updatedAt > since)
