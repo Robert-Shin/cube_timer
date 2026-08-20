@@ -82,9 +82,9 @@ export function ImportDialog({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal wide" onClick={(e) => e.stopPropagation()}>
         <div className="panel-head">
-          <h2>import from csTimer</h2>
+          <h2>Import from csTimer</h2>
           <button className="ghost small" onClick={onClose}>
-            close
+            Close
           </button>
         </div>
 
@@ -175,7 +175,7 @@ export function ImportDialog({
                 disabled={totalSolves === 0 || overflow > 0}
                 className="primary"
               >
-                import
+                Import
               </button>
             </div>
           </>

@@ -10,6 +10,11 @@ export interface Settings {
   trackParity: boolean
   /** 'system' follows the OS; the others override it in both directions. */
   theme: Theme
+  /**
+   * How strongly the stage background photo is dimmed, 0-1. The scrim is what
+   * keeps the timer legible over an arbitrary photo, so it defaults high.
+   */
+  backgroundDim: number
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -17,6 +22,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hideTimeWhileSolving: false,
   trackParity: false,
   theme: 'system',
+  backgroundDim: 0.6,
 }
 
 const KEY = 'cube-timer.settings.v1'

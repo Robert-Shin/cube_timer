@@ -61,8 +61,8 @@ export function sortParity(ids: ParityId[]): ParityId[] {
 
 /** "none", "OLL", "OLL + PLL" -- the category a solve falls into. */
 export function parityLabel(event: EventId, ids: ParityId[] | undefined): string {
-  if (ids === undefined) return 'untracked'
-  if (ids.length === 0) return 'no parity'
+  if (ids === undefined) return 'Untracked'
+  if (ids.length === 0) return 'No parity'
   const types = parityTypes(event)
   return sortParity(ids)
     .map((id) => types.find((t) => t.id === id)?.label.replace(' parity', '') ?? id)
@@ -73,4 +73,25 @@ export function parityLabel(event: EventId, ids: ParityId[] | undefined): string
 export function parityKey(ids: ParityId[] | undefined): string {
   if (ids === undefined) return 'untracked'
   return ids.length === 0 ? 'none' : sortParity(ids).join('+')
+}
+
+/**
+ * Short per-parity labels for the solve list -- one tag each, rather than the
+ * single joined string parityLabel() produces. Empty when the solve had no
+ * parity, or when parity was never recorded for it.
+ */
+export function parityTags(
+  event: EventId,
+  ids: ParityId[] | undefined,
+): { id: ParityId; label: string; title: string }[] {
+  if (!ids?.length) return []
+  const types = parityTypes(event)
+  return sortParity(ids).map((id) => {
+    const t = types.find((x) => x.id === id)
+    return {
+      id,
+      label: t ? t.label.replace(' parity', '').replace('inner-edge', 'edge') : id,
+      title: t ? `${t.label} — ${t.hint}` : id,
+    }
+  })
 }

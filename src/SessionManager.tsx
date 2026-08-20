@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { EVENTS, MAX_SESSIONS, SESSION_COLORS, type EventId, type Session } from './types'
+import { EVENTS, MAX_SESSIONS, type EventId, type Session } from './types'
 import type { Store } from './storage'
 import { parseTime } from './parseTime'
 import { touch, tombstone } from './sync/stamp'
@@ -68,9 +68,9 @@ export function SessionManager({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="panel-head">
-          <h2>sessions</h2>
+          <h2>Sessions</h2>
           <button className="ghost small" onClick={onClose}>
-            close
+            Close
           </button>
         </div>
 
@@ -83,17 +83,6 @@ export function SessionManager({
                 onChange={(e) => patch(s.id, { name: e.target.value })}
                 aria-label="Session name"
               />
-              <span className="swatch-picker">
-                {SESSION_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    className={`swatch-dot ${(s.color ?? 1) === c ? 'on' : ''}`}
-                    style={{ background: `var(--s${c})` }}
-                    aria-label={`Accent ${c}`}
-                    onClick={() => patch(s.id, { color: c })}
-                  />
-                ))}
-              </span>
               <select
                 value={s.event}
                 onChange={(e) => patch(s.id, { event: e.target.value as EventId })}
@@ -108,7 +97,7 @@ export function SessionManager({
               <input
                 className="goal-input"
                 defaultValue={s.goalMs ? formatMs(s.goalMs) : ''}
-                placeholder="goal"
+                placeholder="Goal"
                 aria-label="Sub-X goal"
                 title="Target time for the sub-X rate, e.g. 12 or 1:00"
                 onBlur={(e) => {
@@ -121,16 +110,16 @@ export function SessionManager({
               <span className="count">{counts[s.id] ?? 0}</span>
               {confirming === s.id ? (
                 <button className="danger small" onClick={() => remove(s.id)}>
-                  delete {counts[s.id] ?? 0} solves?
+                  Delete {counts[s.id] ?? 0} solves?
                 </button>
               ) : (
                 <button
                   className="ghost small"
                   disabled={live.length <= 1}
-                  title={live.length <= 1 ? 'the last session cannot be deleted' : ''}
+                  title={live.length <= 1 ? 'The last session cannot be deleted' : ''}
                   onClick={() => setConfirming(s.id)}
                 >
-                  delete
+                  Delete
                 </button>
               )}
             </div>
@@ -139,7 +128,7 @@ export function SessionManager({
 
         <div className="session-add">
           <input
-            placeholder="new session name"
+            placeholder="New session name"
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && add()}
@@ -153,7 +142,7 @@ export function SessionManager({
             ))}
           </select>
           <button className="primary" onClick={add} disabled={full}>
-            add
+            Add
           </button>
         </div>
         <p className="note">

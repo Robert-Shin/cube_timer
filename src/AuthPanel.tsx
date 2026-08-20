@@ -53,9 +53,9 @@ export function AuthPanel({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
         <div className="panel-head">
-          <h2>account</h2>
+          <h2>Account</h2>
           <button className="ghost small" onClick={onClose}>
-            close
+            Close
           </button>
         </div>
 
@@ -66,11 +66,11 @@ export function AuthPanel({
               from.
             </p>
             <div className="stat">
-              <span>status</span>
+              <span>Status</span>
               <strong>{state === 'error' ? 'error' : state}</strong>
             </div>
             <div className="stat">
-              <span>last synced</span>
+              <span>Last synced</span>
               <strong>{lastSyncedAt ? new Date(lastSyncedAt).toLocaleTimeString() : '—'}</strong>
             </div>
             {error && <p className="error">{error}</p>}
@@ -79,7 +79,7 @@ export function AuthPanel({
                 {state === 'syncing' ? 'syncing…' : 'sync now'}
               </button>
               <button className="ghost" onClick={onSignOut}>
-                sign out
+                Sign out
               </button>
             </div>
             <p className="note">
@@ -104,7 +104,7 @@ export function AuthPanel({
             </p>
             <p className="note">
               Sign-in is still limited while this is in testing, so the email may not arrive. The
-              timer works fully without an account; your solves are saved in this browser.
+              The timer works fully without an account; your solves are saved in this browser.
             </p>
             <form className="auth-form" onSubmit={submit}>
               <input

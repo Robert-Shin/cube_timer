@@ -27,7 +27,7 @@ export function PracticeCalendar({ solves }: { solves: Solve[] }) {
   const [year, setYear] = useState<number | null>(null)
   const [hover, setHover] = useState<{ x: number; y: number; key: string } | null>(null)
 
-  if (years.length === 0) return <p className="empty">no solves yet</p>
+  if (years.length === 0) return <p className="empty">No solves yet</p>
 
   const shown = year !== null && years.includes(year) ? year : years[0]
 
@@ -129,7 +129,7 @@ export function PracticeCalendar({ solves }: { solves: Solve[] }) {
 
       {hover && (
         <div className="tooltip" style={{ left: Math.max(0, hover.x - 60), top: hover.y + 22 }}>
-          <strong>{active ? `${active.count} ${active.count === 1 ? 'solve' : 'solves'}` : 'no solves'}</strong>
+          <strong>{active ? `${active.count} ${active.count === 1 ? 'solve' : 'solves'}` : 'No solves'}</strong>
           <span>{new Date(hover.key + 'T12:00:00').toLocaleDateString()}</span>
           {active?.meanMs != null && <span>mean {formatMs(active.meanMs)}</span>}
         </div>

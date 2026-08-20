@@ -32,9 +32,9 @@ export function SolveDetail({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
         <div className="panel-head">
-          <h2>solve {ordinal}</h2>
+          <h2>Solve {ordinal}</h2>
           <button className="ghost small" onClick={onClose}>
-            close
+            Close
           </button>
         </div>
 
@@ -44,17 +44,17 @@ export function SolveDetail({
           {solve.penalty !== 'none' && ` · raw ${formatMs(solve.timeMs)}`}
         </p>
 
-        <h3 className="detail-label">scramble</h3>
+        <h3 className="detail-label">Scramble</h3>
         {solve.scramble ? (
           <p className="detail-scramble">{solve.scramble}</p>
         ) : (
-          <p className="note">no scramble recorded for this solve</p>
+          <p className="note">No scramble recorded for this solve</p>
         )}
 
         {types.length > 0 && (
           <>
             <h3 className="detail-label">
-              parity{solve.parity === undefined ? ' (not recorded)' : ''}
+              Parity{solve.parity === undefined ? ' (not recorded)' : ''}
             </h3>
             <div className="seg">
               {types.map((t) => (
@@ -92,7 +92,7 @@ export function SolveDetail({
             </button>
           </div>
           <button className="danger" onClick={onDelete}>
-            delete solve
+            Delete solve
           </button>
         </div>
       </div>

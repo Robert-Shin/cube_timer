@@ -9,9 +9,9 @@ import { formatMs } from './format'
 export function ParityBreakdown({ solves, event }: { solves: Solve[]; event: EventId }) {
   const groups = parityGroups(solves, event).filter((g) => g.finished > 0)
 
-  if (groups.length === 0) return <p className="empty">no solves yet</p>
+  if (groups.length === 0) return <p className="empty">No solves yet</p>
   if (groups.length === 1 && groups[0].key === 'untracked') {
-    return <p className="empty">turn on parity tracking in settings to break these solves down</p>
+    return <p className="empty">Turn on parity tracking in settings to break these solves down</p>
   }
 
   const hasClean = groups.some((g) => g.key === 'none')
@@ -46,12 +46,12 @@ export function ParityBreakdown({ solves, event }: { solves: Solve[]; event: Eve
       </table>
       {!hasClean && (
         <p className="note">
-          no clean solves recorded yet, so there's nothing to compare against
+          No clean solves recorded yet, so there's nothing to compare against
         </p>
       )}
       {groups.some((g) => g.key === 'untracked') && (
         <p className="note">
-          untracked solves were recorded before parity tracking was on. They're kept out of the
+          Untracked solves were recorded before parity tracking was on. They're kept out of the
           comparison rather than counted as clean.
         </p>
       )}

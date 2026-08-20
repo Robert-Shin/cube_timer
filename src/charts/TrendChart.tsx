@@ -100,14 +100,14 @@ export function TrendChart({
     <div className="chart" ref={ref}>
       <div className="legend">
         <span>
-          <i className="swatch dot" /> individual solves
+          <i className="swatch dot" /> Individual solves
         </span>
         <span>
-          <i className="swatch line" /> rolling mean of {window}
+          <i className="swatch line" /> Rolling mean of {window}
         </span>
         {showBand && (
           <span>
-            <i className="swatch band" /> middle half (p25–p75)
+            <i className="swatch band" /> Middle half (p25–p75)
           </span>
         )}
         {scales.clipped > 0 && (

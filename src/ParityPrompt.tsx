@@ -50,7 +50,7 @@ export function ParityPrompt({
     <div className="modal-backdrop">
       <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
         <div className="panel-head">
-          <h2>parity?</h2>
+          <h2>Parity?</h2>
           <span className="note">{formatMs(timeMs)}</span>
         </div>
 
@@ -72,14 +72,14 @@ export function ParityPrompt({
 
         <div className="modal-actions">
           <span className="note">
-            {picked.length === 0 ? 'nothing selected — saves as no parity' : `${picked.length} selected`}
+            {picked.length === 0 ? 'Nothing selected — saves as no parity' : `${picked.length} selected`}
           </span>
           <button className="primary" onClick={() => onAnswer(sortParity(picked))} autoFocus>
-            save {picked.length === 0 ? 'no parity' : ''}
+            Save {picked.length === 0 ? 'as no parity' : ''}
           </button>
         </div>
         <p className="note kbd-hint">
-          press <kbd>1</kbd>–<kbd>{types.length}</kbd> to toggle, <kbd>enter</kbd> to save
+          Press <kbd>1</kbd>–<kbd>{types.length}</kbd> to toggle, <kbd>enter</kbd> to save
         </p>
       </div>
     </div>

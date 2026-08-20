@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { eventName, MAX_SESSIONS, type EventId, type Penalty, type Session, type Solve } from './types'
+import { effectiveMs, eventName, MAX_SESSIONS, type EventId, type Penalty, type Session, type Solve } from './types'
 import { formatMs, formatSolve } from './format'
-import { averageOf, best, bestAverage, sessionMean } from './stats'
+import { averageOf, best } from './stats'
 import { newScramble } from './scramble'
 import { loadStore, save, type Store } from './storage'
 import { useTimer } from './useTimer'
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings } from './settings'
 import { parseTime } from './parseTime'
+import { clearBackground, loadBackground, prepareImage, saveBackground } from './background'
 import { touch, tombstone } from './sync/stamp'
 import { visible } from './sync/merge'
 import { useSync } from './sync/engine'
@@ -20,8 +21,9 @@ import { SessionManager } from './SessionManager'
 import { SolveDetail } from './SolveDetail'
 import { ParityPrompt } from './ParityPrompt'
 import { ParityBreakdown } from './ParityBreakdown'
-import { hasParity, type ParityId } from './parity'
-import { stdDev, subXRate, suggestGoal } from './stats'
+import { hasParity, parityTags, type ParityId } from './parity'
+import { StatsPane } from './StatsPane'
+import { suggestGoal } from './stats'
 
 export default function App() {
   const [store, setStore] = useState<Store>(() => loadStore())
@@ -44,6 +46,9 @@ export default function App() {
   // during the prompt keeps the time and simply leaves parity unset.
   const [pendingParity, setPendingParity] = useState<string | null>(null)
   const typedInput = useRef<HTMLInputElement>(null)
+  const settingsPanel = useRef<HTMLElement>(null)
+  const settingsBtn = useRef<HTMLButtonElement>(null)
+  const [background, setBackground] = useState<string | null>(null)
 
   // Tombstoned rows stay in the store so their deletion can propagate, but
   // they must never reach the UI or the statistics.
@@ -66,11 +71,46 @@ export default function App() {
 
   useEffect(() => {
     if (!save(store) && store.solves.length > 0) {
-      setToast("couldn't save — browser storage is full")
+      setToast("Couldn't save — browser storage is full")
     }
   }, [store])
 
   const sync = useSync(store, setStore)
+
+  // The blob URL is owned by this component: whatever it points at must be
+  // revoked when it is replaced, or every change leaks the previous photo.
+  useEffect(() => {
+    let url: string | null = null
+    loadBackground().then((blob) => {
+      if (!blob) return
+      url = URL.createObjectURL(blob)
+      setBackground(url)
+    })
+    return () => {
+      if (url) URL.revokeObjectURL(url)
+    }
+  }, [])
+
+  const chooseBackground = async (file: File) => {
+    try {
+      const blob = await prepareImage(file)
+      await saveBackground(blob)
+      setBackground((prev) => {
+        if (prev) URL.revokeObjectURL(prev)
+        return URL.createObjectURL(blob)
+      })
+    } catch {
+      flash("couldn't read that image")
+    }
+  }
+
+  const removeBackground = async () => {
+    await clearBackground().catch(() => {})
+    setBackground((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return null
+    })
+  }
 
   useEffect(() => saveSettings(settings), [settings])
 
@@ -84,6 +124,27 @@ export default function App() {
   useEffect(() => {
     if (settings.inputMode === 'typing' && tab === 'timer') typedInput.current?.focus()
   }, [settings.inputMode, tab, session.id])
+
+  // Settings is a panel, not a modal, so it dismisses like one: click away or
+  // press Escape. The toggle button is excluded, or its own click would close
+  // and immediately reopen.
+  useEffect(() => {
+    if (!showSettings) return
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (settingsPanel.current?.contains(target) || settingsBtn.current?.contains(target)) return
+      setShowSettings(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowSettings(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [showSettings])
 
   const flash = (msg: string) => {
     setToast(msg)
@@ -180,7 +241,7 @@ export default function App() {
       activeId: sessions[0]?.id ?? prev.activeId,
     }))
     setImporting(false)
-    flash(`imported ${imported.length} solves into ${sessions.length} sessions`)
+    flash(`Imported ${imported.length} solves into ${sessions.length} sessions`)
   }
 
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) =>
@@ -189,77 +250,105 @@ export default function App() {
   // An unset goal falls back to a suggestion from the data, so the rate is
   // useful before anyone opens the session manager.
   const goal = session.goalMs ?? suggestGoal(solves)
-  const subX = goal !== null ? subXRate(solves, goal) : null
   const parityEvent = hasParity(session.event)
+  // Tags only make sense while tracking is on: with it off, older solves would
+  // keep showing parity that new solves silently never record.
+  const showParityTags = settings.trackParity && parityEvent
   const pending = pendingParity ? liveSolves.find((s) => s.id === pendingParity) : null
   const detail = detailId ? solves.find((s) => s.id === detailId) : null
   const latest = solves[0]
+  // The single fastest solve in the session: the one result worth colouring.
+  const pbId = useMemo(() => {
+    let bestId: string | null = null
+    let bestMs = Infinity
+    for (const s of solves) {
+      if (s.penalty === 'dnf') continue
+      const ms = effectiveMs(s)
+      if (ms !== null && ms < bestMs) {
+        bestMs = ms
+        bestId = s.id
+      }
+    }
+    return bestId
+  }, [solves])
 
   return (
-    <div
-      className={`app state-${state}`}
-      // The active session's hue becomes the accent for the whole page.
-      style={session.color ? ({ '--accent': `var(--s${session.color})` } as React.CSSProperties) : undefined}
-    >
+    <div className={`app state-${state} tab-${tab}`}>
       <header className="dimmable">
-        <div className="wordmark">
-          <span className="mark" />
-          <span className="cube">Cube</span>
-          <span className="stats">Stats</span>
-        </div>
-        <div className="session-pick">
-          <span className="dot" />
-          <select
-            value={session.id}
-            onChange={(e) => setStore((prev) => ({ ...prev, activeId: e.target.value }))}
-            aria-label="Session"
-          >
-            {liveSessions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name} · {eventName(s.event)} ({counts[s.id] ?? 0})
-              </option>
-            ))}
-          </select>
-          <button className="ghost" onClick={() => setShowSessions(true)}>
-            manage
-          </button>
-        </div>
-
-        <div className="header-actions">
-          <div className="seg">
-            <button className={tab === 'timer' ? 'active' : ''} onClick={() => setTab('timer')}>
-              timer
+        {/* Left: identity and the things you reach for rarely. */}
+        <div className="brand">
+          <div className="wordmark">
+            <svg className="mark" viewBox="0 0 32 22" aria-hidden="true">
+              <path className="curve" d="M1 18C9 18 12.5 3 16 3s7 15 15 15z" />
+              <path className="axis" d="M1 19.3h30" />
+            </svg>
+            <span>Cube Stats</span>
+          </div>
+          <div className="util">
+            <button className="ghost" onClick={() => setImporting(true)}>
+              Import
             </button>
-            <button className={tab === 'stats' ? 'active' : ''} onClick={() => setTab('stats')}>
-              stats
+            {syncConfigured && (
+              <button className="ghost" onClick={() => setShowAuth(true)}>
+                {sync.email ? (
+                  <>
+                    <i className={`sync-dot ${sync.state}`} /> Account
+                  </>
+                ) : (
+                  'Sign in'
+                )}
+              </button>
+            )}
+            <button ref={settingsBtn} className="ghost" onClick={() => setShowSettings((v) => !v)}>
+              Settings
             </button>
           </div>
-          <button className="ghost" onClick={() => setImporting(true)}>
-            import
-          </button>
-          {syncConfigured && (
-            <button className="ghost" onClick={() => setShowAuth(true)}>
-              {sync.email ? (
-                <>
-                  <i className={`sync-dot ${sync.state}`} /> account
-                </>
-              ) : (
-                'sign in'
-              )}
+        </div>
+
+        {/* Right: what you actually operate. */}
+        <div className="header-actions">
+          <div className="session-pick">
+            <select
+              value={session.id}
+              onChange={(e) => setStore((prev) => ({ ...prev, activeId: e.target.value }))}
+              aria-label="Session"
+            >
+              {liveSessions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} · {eventName(s.event)} ({counts[s.id] ?? 0})
+                </option>
+              ))}
+            </select>
+            <button className="ghost small manage" onClick={() => setShowSessions(true)}>
+              Manage
             </button>
-          )}
-          <button className="ghost" onClick={() => setShowSettings((v) => !v)}>
-            settings
-          </button>
+          </div>
+          <div className="seg tabs">
+            <button className={tab === 'timer' ? 'active' : ''} onClick={() => setTab('timer')}>
+              Timer
+            </button>
+            <button className={tab === 'stats' ? 'active' : ''} onClick={() => setTab('stats')}>
+              Stats
+            </button>
+          </div>
         </div>
       </header>
 
       {showSettings && (
-        <section className="panel settings dimmable">
+        <section className="panel settings dimmable" ref={settingsPanel}>
           <div className="panel-head">
-            <h2>settings</h2>
-            <button className="ghost small" onClick={() => setSettings(DEFAULT_SETTINGS)}>
-              reset
+            <div className="head-left">
+              <h2>Settings</h2>
+              <button className="ghost small" onClick={() => setSettings(DEFAULT_SETTINGS)}>
+                Reset
+              </button>
+            </div>
+            <button
+              className="ghost small close"
+              onClick={() => setShowSettings(false)}
+              aria-label="Close settings"
+            >
+              ×
             </button>
           </div>
 
@@ -270,10 +359,10 @@ export default function App() {
             </div>
             <div className="seg">
               <button className={!typing ? 'active' : ''} onClick={() => update('inputMode', 'timer')}>
-                timer
+                Timer
               </button>
               <button className={typing ? 'active' : ''} onClick={() => update('inputMode', 'typing')}>
-                typing
+                Typing
               </button>
             </div>
           </div>
@@ -290,7 +379,7 @@ export default function App() {
                   className={settings.theme === t ? 'active' : ''}
                   onClick={() => update('theme', t)}
                 >
-                  {t}
+                  {t[0].toUpperCase() + t.slice(1)}
                 </button>
               ))}
             </div>
@@ -316,6 +405,49 @@ export default function App() {
 
           <div className="setting">
             <div>
+              <strong>Background</strong>
+              <p>
+                A photo behind the timer. Stored on this device only, never synced. The dim keeps
+                the time readable over it.
+              </p>
+            </div>
+            <div className="bg-controls">
+              <label className="file-button">
+                {background ? 'Replace' : 'Choose photo'}
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) chooseBackground(file)
+                    e.target.value = ''
+                  }}
+                />
+              </label>
+              {background && (
+                <>
+                  <label className="ctrl">
+                    dim
+                    <input
+                      type="range"
+                      min={0}
+                      max={0.95}
+                      step={0.05}
+                      value={settings.backgroundDim}
+                      onChange={(e) => update('backgroundDim', Number(e.target.value))}
+                      aria-label="Background dim"
+                    />
+                  </label>
+                  <button className="ghost small" onClick={removeBackground}>
+                    Remove
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="setting">
+            <div>
               <strong>Hide time while solving</strong>
               <p>Shows "solving" instead of a running count. The time still records.</p>
             </div>
@@ -331,58 +463,83 @@ export default function App() {
         </section>
       )}
 
-      {tab === 'timer' && (
-        <>
-          <p className="scramble dimmable">
-            {scrambling ? 'generating scramble…' : scramble}
-            <button className="ghost small refresh" onClick={() => nextScramble(session.event)}>
-              ↻
-            </button>
-          </p>
+      <main className="workspace">
+        <aside className="pane pane-left dimmable">
+          <StatsPane solves={solves} goalMs={goal} />
+        </aside>
 
-          {typing ? (
-            <form className="typed dimmable" onSubmit={submitTyped}>
-              <input
-                ref={typedInput}
-                value={typed}
-                onChange={(e) => setTyped(e.target.value)}
-                placeholder="1234"
-                aria-label="Enter solve time"
-                inputMode="numeric"
-                autoFocus
-              />
-              <button type="submit" disabled={parseTime(typed) === null}>
-                add
-              </button>
-            </form>
+        <section
+          className={`stage${background ? ' has-bg' : ''}`}
+          style={
+            background
+              ? ({
+                  '--stage-photo': `url("${background}")`,
+                  '--stage-dim': String(settings.backgroundDim),
+                } as React.CSSProperties)
+              : undefined
+          }
+        >
+          {tab === 'timer' ? (
+            <>
+              <p className="scramble dimmable">
+                {scrambling ? 'Generating scramble…' : scramble}
+                <button className="ghost small refresh" onClick={() => nextScramble(session.event)}>
+                  ↻
+                </button>
+              </p>
+
+              {typing ? (
+                <form className="typed dimmable" onSubmit={submitTyped}>
+                  <input
+                    ref={typedInput}
+                    value={typed}
+                    onChange={(e) => setTyped(e.target.value)}
+                    placeholder="1234"
+                    aria-label="Enter solve time"
+                    inputMode="numeric"
+                    autoFocus
+                  />
+                  <button type="submit" disabled={parseTime(typed) === null}>
+                    Add
+                  </button>
+                </form>
+              ) : (
+                <div className="timer">
+                  {settings.hideTimeWhileSolving && state === 'running' ? 'solving' : formatMs(display)}
+                </div>
+              )}
+              <p className="hint dimmable">
+                {typing
+                  ? parseTime(typed) !== null
+                    ? formatMs(parseTime(typed)!)
+                    : typed.trim() === ''
+                      ? 'Type it as it reads: 1234 → 12.34, 12345 → 1:23.45'
+                      : 'Not a time'
+                  : state === 'idle'
+                    ? 'Hold space to start'
+                    : state === 'running'
+                      ? ''
+                      : 'Release to go'}
+              </p>
+              <div className="readout dimmable">
+                <span>
+                  ao5 <strong>{fmt(averageOf(solves, 5))}</strong>
+                </span>
+                <span>
+                  ao12 <strong>{fmt(averageOf(solves, 12))}</strong>
+                </span>
+                <span>
+                  best <strong>{fmtStat(best(solves))}</strong>
+                </span>
+              </div>
+            </>
           ) : (
-            <div className="timer">
-              {settings.hideTimeWhileSolving && state === 'running' ? 'solving' : formatMs(display)}
-            </div>
-          )}
-          <p className="hint dimmable">
-            {typing
-              ? parseTime(typed) !== null
-                ? formatMs(parseTime(typed)!)
-                : typed.trim() === ''
-                  ? 'type it as it reads: 1234 → 12.34, 12345 → 1:23.45'
-                  : 'not a time'
-              : state === 'idle'
-                ? 'hold space to start'
-                : state === 'running'
-                  ? ''
-                  : 'release to go'}
-          </p>
-        </>
-      )}
-
-      {tab === 'stats' && (
         <div className="stats-view dimmable">
           <section className="panel">
             <div className="panel-head">
-              <h2>distribution · {session.name}</h2>
+              <h2>Distribution · {session.name}</h2>
               <label className="ctrl">
-                bucket
+                Bucket
                 <select value={bucketMs} onChange={(e) => setBucketMs(Number(e.target.value))}>
                   <option value={50}>0.05s</option>
                   <option value={100}>0.1s</option>
@@ -402,7 +559,7 @@ export default function App() {
 
           <section className="panel">
             <div className="panel-head">
-              <h2>improvement over time</h2>
+              <h2>Improvement over time</h2>
               <div className="ctrl-group">
                 <label className="ctrl">
                   <input
@@ -410,10 +567,10 @@ export default function App() {
                     checked={showBand}
                     onChange={(e) => setShowBand(e.target.checked)}
                   />
-                  percentile band
+                  Percentile band
                 </label>
                 <label className="ctrl">
-                  window
+                  Window
                   <select value={rollWindow} onChange={(e) => setRollWindow(Number(e.target.value))}>
                     <option value={5}>5</option>
                     <option value={12}>12</option>
@@ -429,19 +586,19 @@ export default function App() {
 
           <section className="panel">
             <div className="panel-head">
-              <h2>practice</h2>
+              <h2>Practice</h2>
               <div className="seg">
                 <button
                   className={calendarScope === 'session' ? 'active' : ''}
                   onClick={() => setCalendarScope('session')}
                 >
-                  this session
+                  This session
                 </button>
                 <button
                   className={calendarScope === 'all' ? 'active' : ''}
                   onClick={() => setCalendarScope('all')}
                 >
-                  all sessions
+                  All sessions
                 </button>
               </div>
             </div>
@@ -451,54 +608,42 @@ export default function App() {
           {parityEvent && (
             <section className="panel">
               <div className="panel-head">
-                <h2>cost of parity</h2>
+                <h2>Cost of parity</h2>
               </div>
               <ParityBreakdown solves={solves} event={session.event} />
             </section>
           )}
         </div>
-      )}
-
-      <div className="body dimmable">
-        <section className="panel">
-          <h2>
-            {session.name} · {eventName(session.event)}
-          </h2>
-          <Stat label="solves" value={String(solves.length)} />
-          <Stat label="best" value={fmtStat(best(solves))} />
-          <Stat label="mean" value={fmtStat(sessionMean(solves))} />
-          <Stat label="std dev" value={fmtStat(stdDev(solves))} />
-          {goal !== null && (
-            <Stat
-              label={`sub-${formatMs(goal).replace(/\.00$/, '')}`}
-              value={subX ? `${Math.round(subX.rate * 100)}%` : '—'}
-              title={subX ? `${subX.under} of ${subX.total} solves, DNFs included` : undefined}
-            />
           )}
-          <Stat label="ao5" value={fmt(averageOf(solves, 5))} />
-          <Stat label="ao12" value={fmt(averageOf(solves, 12))} />
-          <Stat label="best ao5" value={fmt(bestAverage(solves, 5))} />
-          <Stat label="best ao12" value={fmt(bestAverage(solves, 12))} />
         </section>
 
-        <section className="panel">
+        <aside className="pane pane-right dimmable">
           <div className="panel-head">
-            <h2>solves</h2>
+            <h2>Solves</h2>
             {solves.length > 0 && (
               <button className="ghost small" onClick={clearSession}>
-                clear
+                Clear
               </button>
             )}
           </div>
-          {solves.length === 0 && <p className="empty">no solves yet</p>}
-          {/* Capped height: a long session must not stretch the page. */}
+          {solves.length === 0 && <p className="empty">No solves yet</p>}
           <ol className="solves">
             {solves.map((s, i) => (
-              <li key={s.id} className={s.id === latest?.id ? 'latest' : ''}>
+              <li
+                key={s.id}
+                className={`${s.id === latest?.id ? 'latest' : ''} ${s.id === pbId ? 'pb' : ''}`}
+              >
                 <button className="solve-open" onClick={() => setDetailId(s.id)}>
                   <span className="idx">{solves.length - i}.</span>
                   <span className="time">{formatSolve(s)}</span>
+                  {s.id === pbId && solves.length > 1 && <span className="tag pb-tag">PB</span>}
                 </button>
+                {showParityTags &&
+                  parityTags(session.event, s.parity).map((t) => (
+                    <span key={t.id} className={`tag parity-tag p-${t.id}`} title={t.title}>
+                      {t.label}
+                    </span>
+                  ))}
                 <span className="actions">
                   <button
                     className={s.penalty === 'plus2' ? 'on' : ''}
@@ -512,13 +657,13 @@ export default function App() {
                   >
                     DNF
                   </button>
-                  <button onClick={() => deleteSolve(s.id)}>×</button>
+                  <button className="del" onClick={() => deleteSolve(s.id)}>×</button>
                 </span>
               </li>
             ))}
           </ol>
-        </section>
-      </div>
+        </aside>
+      </main>
 
       {showSessions && (
         <SessionManager
@@ -600,13 +745,4 @@ function fmt(v: number | null | undefined): string {
  */
 function fmtStat(v: number | null | undefined): string {
   return v == null ? '—' : formatMs(v)
-}
-
-function Stat({ label, value, title }: { label: string; value: string; title?: string }) {
-  return (
-    <div className="stat" title={title}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  )
 }

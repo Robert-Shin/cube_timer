@@ -1,15 +1,15 @@
-/* Warm ink neutrals rather than blue-grey, in both directions. Series slots
-   are per-theme steps of the same eight hues, validated against each
-   theme's panel surface. */
+/* True neutrals. Colour is data here: it appears in charts, parity, penalties
+   and personal bests, and never in the chrome. That rule is why the interface
+   is grey -- not for lack of a palette. */
 :root {
   color-scheme: light;
 
-  --bg: #f7f4ef;
-  --panel: #fffdfa;
-  --line: #e4ded3;
-  --text: #1c1a17;
-  --dim: #6d675e;
-  --raised: #f1ece3;
+  --bg: #f4f4f4;
+  --panel: #ffffff;
+  --line: #e2e2e2;
+  --text: #131313;
+  --dim: #6e6e6e;
+  --raised: #ededed;
 
   --s1: #2a78d6;
   --s2: #eb6834;
@@ -23,19 +23,38 @@
   --series-1: var(--s1);
   --series-2: var(--s2);
   --danger: #c0362f;
+  /* The one colour that marks a result rather than a state. */
+  --pb: #0f8a5f;
 
-  /* Calendar ramp: one hue, light to dark. */
-  --cal0: #ece6da;
+  /* Calendar ramp: one hue, light to dark, on a neutral floor. */
+  --cal0: #ebebeb;
   --cal1: #bcd4ef;
   --cal2: #86b1e2;
   --cal3: #4f8dd4;
   --cal4: #2a78d6;
 
+  /* The mark's one coloured facelet. Chrome never uses it. */
   --accent: var(--s1);
   --on-accent: #ffffff;
 
+  /* Timer states: red until the hold arms, green once it has. */
+  --hold: var(--s8);
+  --ready: var(--s3);
+
   --font-timer: ui-monospace, "SF Mono", "JetBrains Mono", "Roboto Mono", Menlo,
     Consolas, monospace;
+  --font-num: var(--font-timer);
+
+  --t-xs: 11.5px;
+  --t-sm: 13px;
+  --t-md: 15px;
+  --t-lg: 18px;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 18px;
+  --sp-5: 28px;
 }
 
 /* The OS setting, unless the user has explicitly chosen light. */
@@ -43,12 +62,12 @@
   :root:not([data-theme='light']) {
     color-scheme: dark;
 
-    --bg: #131210;
-    --panel: #1c1a17;
-    --line: #302c26;
-    --text: #f0eae1;
-    --dim: #9a9289;
-    --raised: #26231e;
+    --bg: #0d0d0d;
+    --panel: #171717;
+    --line: #262626;
+    --text: #ededed;
+    --dim: #8c8c8c;
+    --raised: #212121;
 
     --s1: #3987e5;
     --s2: #d95926;
@@ -60,14 +79,15 @@
     --s8: #e66767;
 
     --danger: #e66767;
+    --pb: #2fb87f;
 
-    --cal0: #221f1b;
+    --cal0: #1c1c1c;
     --cal1: #14375f;
     --cal2: #1d5490;
     --cal3: #2a72c4;
     --cal4: #3987e5;
 
-    --on-accent: #131210;
+    --on-accent: #0d0d0d;
   }
 }
 
@@ -75,12 +95,12 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  --bg: #131210;
-  --panel: #1c1a17;
-  --line: #302c26;
-  --text: #f0eae1;
-  --dim: #9a9289;
-  --raised: #26231e;
+  --bg: #0d0d0d;
+  --panel: #171717;
+  --line: #262626;
+  --text: #ededed;
+  --dim: #8c8c8c;
+  --raised: #212121;
 
   --s1: #3987e5;
   --s2: #d95926;
@@ -92,17 +112,20 @@
   --s8: #e66767;
 
   --danger: #e66767;
+  --pb: #2fb87f;
 
-  --cal0: #221f1b;
+  --cal0: #1c1c1c;
   --cal1: #14375f;
   --cal2: #1d5490;
   --cal3: #2a72c4;
   --cal4: #3987e5;
 
-  --on-accent: #131210;
+  --on-accent: #0d0d0d;
 }
 
 * { box-sizing: border-box; }
+
+html, body { height: 100%; }
 
 body {
   margin: 0;
@@ -110,40 +133,86 @@ body {
   color: var(--text);
   transition: background 200ms ease, color 200ms ease;
   font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  /* The page itself never scrolls: holding space to start the timer would
+     scroll it away from the scramble. Overflow lives in the panels below. */
+  overflow: hidden;
 }
 
+/* No centred column: a tool occupies the window it was given. Panes run to
+   the edges and are separated by rules, not by gutters of empty page. */
 .app {
-  max-width: 1000px;
-  margin: 0 auto;
-  padding: 24px 20px 60px;
+  /* dvh, not vh, so mobile browser chrome doesn't push the page off-screen. */
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--panel);
 }
 
 header {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  gap: var(--sp-4);
   flex-wrap: wrap;
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
 }
+/* Two clusters. Left is identity plus the things you touch rarely; right is
+   what you actually operate. Size does the explaining. */
+.brand { display: flex; align-items: center; gap: var(--sp-4); min-width: 0; }
+.brand .util { display: flex; gap: 2px; }
+.brand .util button { font-size: var(--t-xs); color: var(--dim); padding: 4px 7px; }
+.brand .util button:hover { color: var(--text); }
+
+.header-actions { display: flex; align-items: center; gap: var(--sp-5); }
 
 .events { display: flex; gap: 6px; }
 
+/* A border means "you can type here". Buttons are text until you reach for
+   them, so the only outlined things on screen are the editable ones. */
 button {
-  background: var(--panel);
+  background: none;
   color: var(--text);
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 6px;
-  padding: 6px 12px;
+  padding: 6px 10px;
   font: inherit;
+  font-size: var(--t-sm);
   cursor: pointer;
 }
-button:hover { border-color: var(--dim); }
-button.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+button:hover { background: var(--raised); }
+button.active { background: var(--text); border-color: var(--text); color: var(--panel); font-weight: 600; }
+
+/* The view switch is the largest control on the page after the timer. */
+.seg.tabs { gap: var(--sp-3); }
+.seg.tabs button {
+  border-radius: 0;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 3px 1px;
+  font-size: var(--t-lg);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--dim);
+  background: none;
+}
+.seg.tabs button:hover { color: var(--text); background: none; }
+.seg.tabs button.active {
+  background: none;
+  color: var(--text);
+  border-bottom-color: var(--text);
+  font-weight: 600;
+}
 button.ghost { background: none; color: var(--dim); }
-button.small { padding: 2px 8px; font-size: 12px; }
+button.ghost:hover { color: var(--text); background: var(--raised); }
+button.small { padding: 2px 8px; font-size: var(--t-xs); }
 
 .scramble {
-  margin: 28px auto 0;
+  flex-shrink: 0;
+  margin: clamp(8px, 2.5vh, 28px) auto 0;
   max-width: 700px;
   text-align: center;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -157,9 +226,11 @@ button.small { padding: 2px 8px; font-size: 12px; }
   text-align: center;
   font-variant-numeric: tabular-nums;
   font-weight: 200;
-  font-size: clamp(64px, 17vw, 150px);
+  /* Bounded by height as well as width, so a short window still fits. */
+  font-size: clamp(44px, min(17vw, 21vh), 150px);
   line-height: 1.1;
   margin: 8px 0 0;
+  flex-shrink: 0;
   transition: color 90ms linear;
 }
 .state-holding .timer { color: var(--hold); }
@@ -168,43 +239,91 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .hint {
   text-align: center;
   color: var(--dim);
-  font-size: 13px;
-  margin: 0 0 32px;
+  font-size: var(--t-sm);
+  margin: 0 0 var(--sp-2);
   min-height: 1.2em;
+  flex-shrink: 0;
 }
 
-.body {
+.workspace {
+  flex: 1 1 auto;
+  min-height: 0;
   display: grid;
-  grid-template-columns: 260px 1fr;
-  gap: 16px;
+  grid-template-columns: 224px minmax(0, 1fr) 286px;
 }
-@media (max-width: 720px) { .body { grid-template-columns: 1fr; } }
+.pane {
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg);
+}
+.pane-left { border-right: 1px solid var(--line); }
+.pane-right {
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  padding-bottom: var(--sp-2);
+}
+/* The stage is the calm half of the density contrast: one instrument, air
+   around it, and the panes carrying the dense data on either side. */
+.stage {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--panel);
+}
+.app.tab-stats .stage { justify-content: flex-start; overflow-y: auto; }
+
+@media (max-width: 1100px) {
+  .workspace { grid-template-columns: minmax(0, 1fr) 286px; }
+  .pane-left { display: none; }
+}
+@media (max-width: 760px) {
+  .workspace { grid-template-columns: minmax(0, 1fr); }
+  .pane-right { display: none; }
+}
+
 
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 14px 16px;
+  border-radius: 8px;
+  padding: var(--sp-3) var(--sp-4);
 }
+/* Inside a pane there is no card at all -- the pane is the container. */
+.pane .panel, .pane-right .panel { border: none; padding: 0; background: none; }
+/* Sentence case, one weight, no tracking: the heading is a label, not a
+   decoration. */
 .panel h2 {
-  margin: 0 0 10px;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  margin: 0 0 var(--sp-3);
+  font-size: var(--t-sm);
   color: var(--dim);
   font-weight: 600;
 }
-.panel-head { display: flex; justify-content: space-between; align-items: baseline; }
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-3); }
+.panel-head .head-left { display: flex; align-items: baseline; gap: var(--sp-3); }
+.panel-head .close { font-size: var(--t-lg); line-height: 1; padding: 0 var(--sp-2); color: var(--dim); }
+.panel-head .close:hover { color: var(--text); }
 
 .stat {
   display: flex;
   justify-content: space-between;
-  padding: 5px 0;
-  border-bottom: 1px solid var(--line);
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding: 3px 0;
 }
-.stat:last-child { border-bottom: none; }
-.stat span { color: var(--dim); }
-.stat strong { font-variant-numeric: tabular-nums; font-weight: 600; }
+.stat span { color: var(--dim); font-size: var(--t-sm); }
+.stat strong {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'zero' 1;
+  font-weight: 500;
+  font-size: var(--t-md);
+  letter-spacing: -0.02em;
+}
 
 .empty { color: var(--dim); margin: 4px 0; }
 
@@ -212,25 +331,54 @@ button.small { padding: 2px 8px; font-size: 12px; }
   list-style: none;
   margin: 0;
   padding: 0 6px 0 0;
-  /* Capped so a 2000-solve session scrolls in place instead of
-     stretching the page to thousands of pixels. */
-  max-height: 420px;
+  /* Fills whatever height the panel has and scrolls in place, so a
+     2000-solve session never stretches the page. */
+  flex: 1 1 auto;
+  /* Low enough that a very short window still shows a row or two rather than
+     pushing the panel past the bottom edge. */
+  min-height: 52px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-.solves::-webkit-scrollbar { width: 8px; }
-.solves::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
-.solves::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+.solves,
+.pane,
+.stats-view,
+.settings,
+.app.tab-stats { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.solves::-webkit-scrollbar,
+.pane::-webkit-scrollbar,
+.stats-view::-webkit-scrollbar,
+.settings::-webkit-scrollbar,
+.app.tab-stats::-webkit-scrollbar { width: 8px; background: transparent; }
+/* No track: the gutter should read as page, not as a channel. */
+.solves::-webkit-scrollbar-track,
+.pane::-webkit-scrollbar-track,
+.stats-view::-webkit-scrollbar-track,
+.settings::-webkit-scrollbar-track,
+.app.tab-stats::-webkit-scrollbar-track { background: transparent; }
+.solves::-webkit-scrollbar-thumb,
+.pane::-webkit-scrollbar-thumb,
+.stats-view::-webkit-scrollbar-thumb,
+.settings::-webkit-scrollbar-thumb,
+.app.tab-stats::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.solves::-webkit-scrollbar-thumb:hover,
+.pane::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+/* No rules between rows: monospaced numerals in a fixed column already line
+   up, and 40 hairlines is what made this read as a generated table. */
 .solves li {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 5px 0;
-  border-bottom: 1px solid var(--line);
+  gap: 5px;
+  padding: 1px 2px;
+  border-radius: 5px;
+  min-width: 0;
+  /* Clip rather than let a long row draw over its neighbours. */
+  overflow: hidden;
 }
-.solves li:last-child { border-bottom: none; }
+.solves li:hover { background: var(--raised); }
 .solve-open {
-  flex: 1;
+  flex: 0 0 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -243,31 +391,61 @@ button.small { padding: 2px 8px; font-size: 12px; }
   font: inherit;
   cursor: pointer;
 }
-.solve-open:hover { background: var(--raised); border-color: transparent; }
-.solves .idx { color: var(--dim); width: 34px; font-variant-numeric: tabular-nums; }
-.solves .time { font-variant-numeric: tabular-nums; font-weight: 600; flex: 1; }
-.solves li.latest .time { color: var(--accent); }
-.solves .actions { display: flex; gap: 4px; }
+.solve-open:hover { background: none; }
+.solves .idx {
+  color: var(--dim);
+  width: 26px;
+  flex-shrink: 0;
+  text-align: right;
+  font-family: var(--font-num);
+  font-size: var(--t-sm);
+  font-variant-numeric: tabular-nums;
+}
+.solves .time {
+  white-space: nowrap;
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'zero' 1;
+  font-weight: 500;
+  font-size: var(--t-md);
+  letter-spacing: -0.02em;
+}
+/* Colour marks a result, never a state: the newest solve is merely bold,
+   while the session best is the one thing worth a hue. */
+.solves li.latest .time { font-weight: 700; }
+.solves li.pb .time { color: var(--pb); }
+.tag.pb-tag {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--pb);
+  color: var(--panel);
+  flex-shrink: 0;
+}
+.solves .actions { display: flex; gap: 1px; flex-shrink: 0; margin-left: auto; }
 /* Dim per-button, not on the parent -- a parent opacity would also fade an
    active +2/DNF badge, which must stay legible. */
-.solves .actions button { padding: 1px 7px; font-size: 12px; color: var(--dim); opacity: 0.55; border-color: transparent; }
+.solves .actions button { padding: 1px 3px; font-size: var(--t-xs); color: var(--dim); opacity: 0.55; border-color: transparent; }
 .solves li:hover .actions button { color: var(--text); border-color: var(--line); }
-.solves .actions button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); opacity: 1; }
+.solves .actions .del { display: none; }
+.solves li:hover .actions .del, .solves li:focus-within .actions .del { display: inline-block; }
+.solves .actions button.on { background: var(--text); border-color: var(--text); color: var(--panel); opacity: 1; }
 
-.header-actions { display: flex; gap: 6px; }
 
-.settings { margin-top: 16px; }
+.settings { margin-top: var(--sp-3); flex-shrink: 0; max-height: 60vh; overflow-y: auto; }
 .setting {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 20px;
-  padding: 12px 0;
+  gap: var(--sp-5);
+  padding: var(--sp-3) 0;
   border-bottom: 1px solid var(--line);
 }
 .setting:last-child { border-bottom: none; }
 .setting strong { font-weight: 600; }
-.setting p { margin: 2px 0 0; color: var(--dim); font-size: 13px; }
+.setting p { margin: 2px 0 0; color: var(--dim); font-size: var(--t-sm); max-width: 52ch; }
 
 .seg { display: flex; gap: 4px; flex-shrink: 0; }
 
@@ -300,9 +478,9 @@ button.small { padding: 2px 8px; font-size: 12px; }
   background: var(--text);
   transition: transform 140ms;
 }
-.switch input:checked + span { background: var(--accent); }
-.switch input:checked + span::after { transform: translateX(20px); background: var(--on-accent); }
-.switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch input:checked + span { background: var(--text); }
+.switch input:checked + span::after { transform: translateX(20px); background: var(--panel); }
+.switch input:focus-visible + span { outline: 2px solid var(--text); outline-offset: 2px; }
 
 .typed {
   display: flex;
@@ -322,9 +500,110 @@ button.small { padding: 2px 8px; font-size: 12px; }
   width: min(360px, 70vw);
   padding: 6px 14px;
 }
-.typed input:focus { outline: none; border-color: var(--accent); }
+.typed input:focus { outline: none; border-color: var(--text); }
 .typed button { padding: 10px 18px; }
 .typed button:disabled { opacity: 0.4; cursor: default; }
+
+/* Instrument readout: the running averages, set as data rather than prose. */
+.readout {
+  display: flex;
+  justify-content: center;
+  gap: var(--sp-5);
+  margin: 0 0 clamp(10px, 2.5vh, 30px);
+  font-size: var(--t-sm);
+  color: var(--dim);
+  flex-shrink: 0;
+}
+.readout span { display: inline-flex; align-items: baseline; gap: var(--sp-2); }
+.readout strong {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'zero' 1;
+  font-weight: 500;
+  font-size: var(--t-md);
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+/* ---- stage background ------------------------------------------------- */
+/* The photo lives behind the stage only; the panes stay opaque so the data
+   never has to compete with it. The scrim between photo and content is what
+   makes an arbitrary image safe to put behind a timer. */
+.stage.has-bg { position: relative; isolation: isolate; }
+.stage.has-bg::before,
+.stage.has-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+.stage.has-bg::before {
+  background-image: var(--stage-photo);
+  background-size: cover;
+  background-position: center;
+}
+.stage.has-bg::after {
+  background: var(--panel);
+  opacity: var(--stage-dim, 0.6);
+}
+
+.bg-controls { display: flex; align-items: center; gap: var(--sp-3); flex-shrink: 0; }
+.bg-controls .ctrl { gap: var(--sp-2); }
+.bg-controls input[type='range'] { width: 92px; accent-color: var(--text); }
+/* The native file input is unusable as chrome; the label is the button. */
+.file-button {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: var(--t-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.file-button:hover { background: var(--raised); }
+.file-button input { display: none; }
+
+/* A pane's heading labels the pane; it is not a page heading. */
+.pane h2 {
+  margin: 0;
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--dim);
+}
+.pane .panel-head { align-items: center; margin-bottom: var(--sp-2); flex-shrink: 0; }
+
+/* ---- figures --------------------------------------------------------- */
+.stats-pane { display: flex; flex-direction: column; gap: var(--sp-4); }
+.figures {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-sm);
+}
+.figures th {
+  font-weight: 400;
+  color: var(--dim);
+  text-align: left;
+  padding: 2px 0;
+  white-space: nowrap;
+}
+.figures thead th {
+  font-size: var(--t-xs);
+  text-align: right;
+  padding-bottom: var(--sp-1);
+}
+.figures td {
+  text-align: right;
+  padding: 2px 0 2px var(--sp-3);
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'zero' 1;
+  font-size: var(--t-sm);
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+/* The best column is the reference, so it recedes; current is what changes. */
+.figures td.hi { color: var(--dim); }
+.figures.secondary th, .figures.secondary td { padding-top: 1px; padding-bottom: 1px; }
 
 /* ---- charts ---------------------------------------------------------- */
 /* Series colors validated for this dark surface: CVD ΔE 26.8, normal 31.8. */
@@ -333,14 +612,14 @@ button.small { padding: 2px 8px; font-size: 12px; }
   --series-2: #d95926; /* rolling mean */
 }
 
-.stats-view { display: grid; gap: 16px; margin-bottom: 16px; }
+.stats-view { display: grid; gap: var(--sp-3); align-content: start; padding-bottom: var(--sp-3); }
 .chart { position: relative; }
 .chart svg { display: block; overflow: visible; }
 .chart-empty { color: var(--dim); padding: 40px 0; text-align: center; }
 
 .grid { stroke: var(--line); stroke-width: 1; }
 .axis { stroke: var(--line); stroke-width: 1; }
-.tick { fill: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.tick { fill: var(--dim); font-size: var(--t-xs); font-variant-numeric: tabular-nums; font-family: var(--font-num); }
 
 .bar { fill: var(--series-1); }
 .bar-on { opacity: 0.75; }
@@ -437,7 +716,7 @@ select {
   gap: 12px;
   padding-top: 4px;
 }
-button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+button.primary { background: var(--text); border-color: var(--text); color: var(--panel); font-weight: 600; }
 button:disabled { opacity: 0.4; cursor: default; }
 
 input[type='file'] { margin: 10px 0; color: var(--dim); font: inherit; font-size: 13px; }
@@ -448,15 +727,27 @@ input[type='file'] { margin: 10px 0; color: var(--dim); font: inherit; font-size
   left: 50%;
   transform: translateX(-50%);
   background: var(--panel);
-  border: 1px solid var(--accent);
+  border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px 18px;
   z-index: 30;
 }
 
 /* ---- sessions -------------------------------------------------------- */
-.session-pick { display: flex; gap: 6px; align-items: center; }
-.session-pick select { max-width: 260px; }
+.session-pick { display: flex; gap: var(--sp-1); align-items: center; }
+/* Primary item: reads as a heading you can change, so no input chrome until
+   hover -- the border rule is reserved for things you type into. */
+.session-pick select {
+  max-width: 260px;
+  font-size: var(--t-md);
+  font-weight: 500;
+  color: var(--text);
+  background: none;
+  border-color: transparent;
+  padding: 2px 4px;
+}
+.session-pick select:hover { background: var(--raised); }
+.session-pick .manage { color: var(--dim); }
 
 .session-list { margin: 10px 0; }
 .session-row,
@@ -487,7 +778,7 @@ input[type='file'] { margin: 10px 0; color: var(--dim); font: inherit; font-size
   font-size: 14px;
   padding: 5px 9px;
 }
-.name-input:focus { outline: none; border-color: var(--accent); }
+.name-input:focus { outline: none; border-color: var(--text); }
 .session-add input { flex: 1; min-width: 0; }
 .session-add input:not(.name-input) {
   background: var(--bg);
@@ -507,6 +798,8 @@ button.danger:hover { background: color-mix(in oklab, var(--danger) 14%, var(--p
 .modal.wide { width: min(720px, 100%); }
 
 .detail-time {
+  font-family: var(--font-num);
+  letter-spacing: -0.03em;
   font-size: 52px;
   font-weight: 200;
   font-variant-numeric: tabular-nums;
@@ -514,11 +807,10 @@ button.danger:hover { background: color-mix(in oklab, var(--danger) 14%, var(--p
   margin-top: 6px;
 }
 .detail-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: var(--t-sm);
   color: var(--dim);
-  margin: 18px 0 6px;
+  font-weight: 600;
+  margin: var(--sp-4) 0 var(--sp-1);
 }
 .detail-scramble {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -533,7 +825,23 @@ button.danger:hover { background: color-mix(in oklab, var(--danger) 14%, var(--p
   word-spacing: 0.15em;
 }
 
-.refresh { margin-left: 10px; vertical-align: middle; }
+/* Sits with the scramble but stays quiet until wanted -- borderless text
+   would otherwise read as a stray glyph in the move sequence. */
+.refresh {
+  margin-left: var(--sp-2);
+  vertical-align: middle;
+  font-family: inherit;
+  font-size: var(--t-sm);
+  color: var(--dim);
+  opacity: 0.5;
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  line-height: 1;
+}
+.scramble:hover .refresh { opacity: 1; }
+.refresh:hover { background: var(--raised); color: var(--text); }
 
 .import-row input[type='checkbox'] { width: 16px; height: 16px; flex-shrink: 0; }
 .import-row select { flex-shrink: 0; }
@@ -567,11 +875,11 @@ button.danger:hover { background: color-mix(in oklab, var(--danger) 14%, var(--p
 .parity-option span { display: flex; flex-direction: column; }
 .parity-option small { color: var(--dim); font-size: 12px; }
 .parity-option.on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--panel);
 }
-.parity-option.on small { color: var(--on-accent); opacity: 0.75; }
+.parity-option.on small { color: var(--panel); opacity: 0.75; }
 
 kbd {
   background: var(--bg);
@@ -582,15 +890,13 @@ kbd {
   font-size: 12px;
   color: var(--text);
 }
-.parity-option.on kbd { background: color-mix(in oklab, var(--accent) 70%, black); border-color: transparent; color: var(--on-accent); }
+.parity-option.on kbd { background: color-mix(in oklab, var(--text) 70%, var(--panel)); border-color: transparent; color: var(--panel); }
 .kbd-hint { margin-top: 12px; font-size: 12px; }
 
 .breakdown { width: 100%; border-collapse: collapse; font-size: 14px; }
 .breakdown th {
   text-align: right;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: var(--t-sm);
   color: var(--dim);
   font-weight: 600;
   padding: 0 0 6px;
@@ -600,12 +906,31 @@ kbd {
   padding: 7px 0;
   border-bottom: 1px solid var(--line);
   text-align: right;
+  font-family: var(--font-num);
   font-variant-numeric: tabular-nums;
 }
+.breakdown td:first-child { font-family: inherit; }
 .breakdown td:first-child { text-align: left; display: flex; align-items: center; gap: 8px; }
 .breakdown tr:last-child td { border-bottom: none; }
 .breakdown tr.muted td { color: var(--dim); }
 .breakdown td.slower { color: var(--s2); }
+
+/* Parity tags in the solve list: read-only markers, so they sit flat next to
+   the +2/DNF buttons rather than looking pressable. */
+.tag.parity-tag {
+  font-size: 9.5px;
+  padding: 0 3px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  border: 1px solid currentColor;
+  background: none;
+}
+.tag.parity-tag.p-oll { color: var(--series-2); }
+.tag.parity-tag.p-pll { color: var(--s7); }
+.tag.parity-tag.p-edge { color: var(--s3); }
 
 /* ---- percentile band -------------------------------------------------- */
 /* Same hue as the rolling mean: the band and the line describe one entity. */
@@ -657,35 +982,530 @@ kbd {
   padding: 5px 8px;
   text-align: right;
 }
-.goal-input:focus { outline: none; border-color: var(--accent); }
+.goal-input:focus { outline: none; border-color: var(--text); }
 
 /* ---- identity --------------------------------------------------------- */
 .wordmark {
   display: flex;
-  align-items: baseline;
-  gap: 0;
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  margin-right: 4px;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
   user-select: none;
+  white-space: nowrap;
 }
-.wordmark .cube { color: var(--text); }
-.wordmark .stats { color: var(--accent); }
+
+/* The distribution curve from the favicon, in the page's own ink. */
+/* Wider than tall: at this size a square bell loses its tails and reads as a
+   triangle. The favicon has to stay square, so it keeps its own proportions. */
 .wordmark .mark {
-  width: 15px;
+  width: 21px;
   height: 15px;
-  margin-right: 8px;
-  border-radius: 3px;
-  align-self: center;
-  background:
-    linear-gradient(var(--line), var(--line)) 0 0 / 100% 1.5px no-repeat,
-    linear-gradient(var(--line), var(--line)) 0 100% / 100% 1.5px no-repeat,
-    linear-gradient(var(--line), var(--line)) 0 0 / 1.5px 100% no-repeat,
-    linear-gradient(var(--line), var(--line)) 100% 0 / 1.5px 100% no-repeat,
-    linear-gradient(var(--accent), var(--accent)) 0 100% / 100% 55% no-repeat,
-    var(--raised);
+  flex-shrink: 0;
+  overflow: visible;
 }
+.wordmark .mark .curve { fill: var(--accent); }
+.wordmark .mark .axis {
+  stroke: var(--dim);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  fill: none;
+}
+
+/* ---- stage background ------------------------------------------------- */
+/* The photo lives behind the stage only; the panes stay opaque so the data
+   never has to compete with it. The scrim between photo and content is what
+   makes an arbitrary image safe to put behind a timer. */
+.stage.has-bg { position: relative; isolation: isolate; }
+.stage.has-bg::before,
+.stage.has-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+.stage.has-bg::before {
+  background-image: var(--stage-photo);
+  background-size: cover;
+  background-position: center;
+}
+.stage.has-bg::after {
+  background: var(--panel);
+  opacity: var(--stage-dim, 0.6);
+}
+
+.bg-controls { display: flex; align-items: center; gap: var(--sp-3); flex-shrink: 0; }
+.bg-controls .ctrl { gap: var(--sp-2); }
+.bg-controls input[type='range'] { width: 92px; accent-color: var(--text); }
+/* The native file input is unusable as chrome; the label is the button. */
+.file-button {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: var(--t-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.file-button:hover { background: var(--raised); }
+.file-button input { display: none; }
+
+/* A pane's heading labels the pane; it is not a page heading. */
+.pane h2 {
+  margin: 0;
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--dim);
+}
+.pane .panel-head { align-items: center; margin-bottom: var(--sp-2); flex-shrink: 0; }
+
+/* ---- figures --------------------------------------------------------- */
+.stats-pane { display: flex; flex-direction: column; gap: var(--sp-4); }
+.figures {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-sm);
+}
+.figures th {
+  font-weight: 400;
+  color: var(--dim);
+  text-align: left;
+  padding: 2px 0;
+  white-space: nowrap;
+}
+.figures thead th {
+  font-size: var(--t-xs);
+  text-align: right;
+  padding-bottom: var(--sp-1);
+}
+.figures td {
+  text-align: right;
+  padding: 2px 0 2px var(--sp-3);
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'zero' 1;
+  font-size: var(--t-sm);
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+/* The best column is the reference, so it recedes; current is what changes. */
+.figures td.hi { color: var(--dim); }
+.figures.secondary th, .figures.secondary td { padding-top: 1px; padding-bottom: 1px; }
+
+/* ---- charts ---------------------------------------------------------- */
+/* Series colors validated for this dark surface: CVD ΔE 26.8, normal 31.8. */
+:root {
+  --series-1: #3987e5; /* individual solves */
+  --series-2: #d95926; /* rolling mean */
+}
+
+.stats-view { display: grid; gap: var(--sp-3); align-content: start; padding-bottom: var(--sp-3); }
+.chart { position: relative; }
+.chart svg { display: block; overflow: visible; }
+.chart-empty { color: var(--dim); padding: 40px 0; text-align: center; }
+
+.grid { stroke: var(--line); stroke-width: 1; }
+.axis { stroke: var(--line); stroke-width: 1; }
+.tick { fill: var(--dim); font-size: var(--t-xs); font-variant-numeric: tabular-nums; font-family: var(--font-num); }
+
+.bar { fill: var(--series-1); }
+.bar-on { opacity: 0.75; }
+
+.dots circle { fill: var(--series-1); opacity: 0.45; }
+/* Clipped to the top edge -- hollow so they don't read as plotted values. */
+.dots circle.clipped { fill: none; stroke: var(--series-1); stroke-width: 1; opacity: 0.5; }
+.rolling {
+  fill: none;
+  stroke: var(--series-2);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.crosshair { stroke: var(--dim); stroke-width: 1; stroke-dasharray: 3 3; }
+.marker { fill: var(--series-1); stroke: var(--panel); stroke-width: 2; }
+
+.legend { display: flex; gap: 16px; font-size: 12px; color: var(--dim); margin-bottom: 4px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend .dim { color: var(--dim); font-style: italic; }
+.swatch { display: inline-block; }
+.swatch.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--series-1); }
+.swatch.line { width: 14px; height: 2px; border-radius: 2px; background: var(--series-2); }
+
+.tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: nowrap;
+  display: flex;
+  flex-direction: column;
+  z-index: 5;
+}
+.tooltip strong { font-size: 14px; font-variant-numeric: tabular-nums; }
+.tooltip span { color: var(--dim); }
+
+.ctrl { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
+select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+
+/* ---- import modal ---------------------------------------------------- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 20;
+}
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px 20px;
+  width: min(620px, 100%);
+  max-height: 85vh;
+  overflow: auto;
+}
+.note { color: var(--dim); font-size: 13px; }
+.note strong { color: var(--text); }
+.error { color: var(--danger); font-size: 13px; }
+
+.import-list { margin: 12px 0; }
+.import-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.import-row.muted { opacity: 0.45; }
+.import-meta { display: flex; flex-direction: column; min-width: 0; }
+.import-meta span { color: var(--dim); font-size: 12px; }
+
+.modal-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding-top: 4px;
+}
+button.primary { background: var(--text); border-color: var(--text); color: var(--panel); font-weight: 600; }
+button:disabled { opacity: 0.4; cursor: default; }
+
+input[type='file'] { margin: 10px 0; color: var(--dim); font: inherit; font-size: 13px; }
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 18px;
+  z-index: 30;
+}
+
+/* ---- sessions -------------------------------------------------------- */
+.session-pick { display: flex; gap: var(--sp-1); align-items: center; }
+/* Primary item: reads as a heading you can change, so no input chrome until
+   hover -- the border rule is reserved for things you type into. */
+.session-pick select {
+  max-width: 260px;
+  font-size: var(--t-md);
+  font-weight: 500;
+  color: var(--text);
+  background: none;
+  border-color: transparent;
+  padding: 2px 4px;
+}
+.session-pick select:hover { background: var(--raised); }
+.session-pick .manage { color: var(--dim); }
+
+.session-list { margin: 10px 0; }
+.session-row,
+.session-add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 0;
+}
+.session-row { border-bottom: 1px solid var(--line); }
+.session-row .count {
+  color: var(--dim);
+  font-size: 12px;
+  min-width: 42px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.session-add { padding-top: 12px; }
+
+.name-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  padding: 5px 9px;
+}
+.name-input:focus { outline: none; border-color: var(--text); }
+.session-add input { flex: 1; min-width: 0; }
+.session-add input:not(.name-input) {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  padding: 5px 9px;
+}
+
+button.danger { border-color: color-mix(in oklab, var(--danger) 45%, var(--line)); color: var(--danger); }
+button.danger:hover { background: color-mix(in oklab, var(--danger) 14%, var(--panel)); border-color: var(--danger); }
+
+/* ---- solve detail ---------------------------------------------------- */
+.modal.narrow { width: min(440px, 100%); }
+.modal.wide { width: min(720px, 100%); }
+
+.detail-time {
+  font-family: var(--font-num);
+  letter-spacing: -0.03em;
+  font-size: 52px;
+  font-weight: 200;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  margin-top: 6px;
+}
+.detail-label {
+  font-size: var(--t-sm);
+  color: var(--dim);
+  font-weight: 600;
+  margin: var(--sp-4) 0 var(--sp-1);
+}
+.detail-scramble {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  line-height: 1.6;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0 0 4px;
+  user-select: all;
+  word-spacing: 0.15em;
+}
+
+/* Sits with the scramble but stays quiet until wanted -- borderless text
+   would otherwise read as a stray glyph in the move sequence. */
+.refresh {
+  margin-left: var(--sp-2);
+  vertical-align: middle;
+  font-family: inherit;
+  font-size: var(--t-sm);
+  color: var(--dim);
+  opacity: 0.5;
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  line-height: 1;
+}
+.scramble:hover .refresh { opacity: 1; }
+.refresh:hover { background: var(--raised); color: var(--text); }
+
+.import-row input[type='checkbox'] { width: 16px; height: 16px; flex-shrink: 0; }
+.import-row select { flex-shrink: 0; }
+.import-row .import-meta { min-width: 96px; text-align: right; }
+
+/* ---- parity ---------------------------------------------------------- */
+/* Stack order colors; validated on this surface (worst adjacent CVD ΔE 8.4). */
+.bar.s1, .swatch.box.s1 { fill: var(--series-1); background: var(--series-1); }
+.bar.s2, .swatch.box.s2 { fill: var(--series-2); background: var(--series-2); }
+.bar.s3, .swatch.box.s3 { fill: var(--s3); background: var(--s3); }
+.bar.s4, .swatch.box.s4 { fill: var(--s4); background: var(--s4); }
+.bar.bar-on { opacity: 0.78; }
+
+.swatch.box {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.tooltip .tip-row { display: inline-flex; align-items: center; gap: 6px; }
+
+.parity-options { display: flex; flex-direction: column; gap: 8px; margin: 14px 0 4px; }
+.parity-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  text-align: left;
+  border-radius: 8px;
+}
+.parity-option span { display: flex; flex-direction: column; }
+.parity-option small { color: var(--dim); font-size: 12px; }
+.parity-option.on {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--panel);
+}
+.parity-option.on small { color: var(--panel); opacity: 0.75; }
+
+kbd {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--text);
+}
+.parity-option.on kbd { background: color-mix(in oklab, var(--text) 70%, var(--panel)); border-color: transparent; color: var(--panel); }
+.kbd-hint { margin-top: 12px; font-size: 12px; }
+
+.breakdown { width: 100%; border-collapse: collapse; font-size: 14px; }
+.breakdown th {
+  text-align: right;
+  font-size: var(--t-sm);
+  color: var(--dim);
+  font-weight: 600;
+  padding: 0 0 6px;
+}
+.breakdown th:first-child { text-align: left; }
+.breakdown td {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+.breakdown td:first-child { font-family: inherit; }
+.breakdown td:first-child { text-align: left; display: flex; align-items: center; gap: 8px; }
+.breakdown tr:last-child td { border-bottom: none; }
+.breakdown tr.muted td { color: var(--dim); }
+.breakdown td.slower { color: var(--s2); }
+
+/* Parity tags in the solve list: read-only markers, so they sit flat next to
+   the +2/DNF buttons rather than looking pressable. */
+.tag.parity-tag {
+  font-size: 9.5px;
+  padding: 0 3px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  border: 1px solid currentColor;
+  background: none;
+}
+.tag.parity-tag.p-oll { color: var(--series-2); }
+.tag.parity-tag.p-pll { color: var(--s7); }
+.tag.parity-tag.p-edge { color: var(--s3); }
+
+/* ---- percentile band -------------------------------------------------- */
+/* Same hue as the rolling mean: the band and the line describe one entity. */
+.band { fill: var(--series-2); opacity: 0.16; stroke: none; }
+.swatch.band {
+  width: 14px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--series-2);
+  opacity: 0.35;
+}
+
+.ctrl-group { display: flex; gap: 14px; align-items: center; }
+.ctrl input[type='checkbox'] { width: 14px; height: 14px; margin: 0 2px 0 0; }
+
+/* ---- practice calendar ------------------------------------------------ */
+/* Sequential ramp: one hue, light to dark, for one magnitude. */
+.cal-cell.l0 { fill: var(--cal0); }
+.cal-cell.l1 { fill: var(--cal1); }
+.cal-cell.l2 { fill: var(--cal2); }
+.cal-cell.l3 { fill: var(--cal3); }
+.cal-cell.l4 { fill: var(--cal4); }
+.cal-cell { transition: none; }
+.cal-cell:hover { stroke: var(--text); stroke-width: 1.5; }
+
+.cal-swatch { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+.cal-swatch.l0 { background: var(--cal0); }
+.cal-swatch.l1 { background: var(--cal1); }
+.cal-swatch.l2 { background: var(--cal2); }
+.cal-swatch.l3 { background: var(--cal3); }
+.cal-swatch.l4 { background: var(--cal4); }
+
+.cal-label { fill: var(--dim); font-size: 10px; }
+.cal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.cal-scroll { overflow-x: auto; padding-bottom: 4px; }
+.cal-legend { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
+.cal-legend .note { margin: 0 4px; font-size: 11px; }
+
+.goal-input {
+  width: 66px;
+  flex-shrink: 0;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  padding: 5px 8px;
+  text-align: right;
+}
+.goal-input:focus { outline: none; border-color: var(--text); }
+
+/* ---- identity --------------------------------------------------------- */
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  user-select: none;
+  white-space: nowrap;
+}
+
+/* A 3x3 face drawn as grid gaps, with one facelet in the session accent --
+   cube-derived rather than a generic rounded square. */
+.wordmark .mark {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  grid-template: repeat(3, 1fr) / repeat(3, 1fr);
+  gap: 2px;
+  flex-shrink: 0;
+}
+/* --dim, not --line: at 4px a facelet needs real contrast against the page
+   or the mark reads as noise rather than a cube face. */
+.wordmark .mark i {
+  display: block;
+  border-radius: 1px;
+  background: var(--dim);
+  opacity: 0.45;
+}
+.wordmark .mark i:nth-child(5) { background: var(--accent); opacity: 1; }
+.wordmark .mark i:nth-child(5) { background: var(--accent); }
 
 /* ---- timer ------------------------------------------------------------ */
 .timer {
@@ -713,25 +1533,6 @@ kbd {
 }
 
 /* ---- session accent --------------------------------------------------- */
-.swatch-picker { display: flex; gap: 5px; flex-shrink: 0; }
-.swatch-dot {
-  width: 17px;
-  height: 17px;
-  border-radius: 50%;
-  border: 2px solid transparent;
-  padding: 0;
-  cursor: pointer;
-  background-clip: content-box;
-}
-.swatch-dot:hover { border-color: var(--dim); }
-.swatch-dot.on { border-color: var(--text); }
-.session-pick .dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex-shrink: 0;
-}
 
 /* ---- auth and sync ---------------------------------------------------- */
 .auth-form { display: flex; gap: 8px; margin: 12px 0 4px; }
@@ -745,7 +1546,7 @@ kbd {
   font: inherit;
   padding: 8px 10px;
 }
-.auth-form input:focus { outline: none; border-color: var(--accent); }
+.auth-form input:focus { outline: none; border-color: var(--text); }
 
 .sync-dot {
   display: inline-block;
