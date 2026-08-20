@@ -465,9 +465,9 @@ export default function App() {
             {session.name} · {eventName(session.event)}
           </h2>
           <Stat label="solves" value={String(solves.length)} />
-          <Stat label="best" value={fmt(best(solves))} />
-          <Stat label="mean" value={fmt(sessionMean(solves))} />
-          <Stat label="std dev" value={fmt(stdDev(solves))} />
+          <Stat label="best" value={fmtStat(best(solves))} />
+          <Stat label="mean" value={fmtStat(sessionMean(solves))} />
+          <Stat label="std dev" value={fmtStat(stdDev(solves))} />
           {goal !== null && (
             <Stat
               label={`sub-${formatMs(goal).replace(/\.00$/, '')}`}
@@ -585,9 +585,21 @@ export default function App() {
   )
 }
 
-/** undefined = not enough solves yet, null = DNF. */
+/**
+ * For averages, where the two empty cases mean different things:
+ * undefined = not enough solves yet, null = the average itself is a DNF.
+ */
 function fmt(v: number | null | undefined): string {
   return v === undefined ? '—' : formatMs(v)
+}
+
+/**
+ * For plain statistics, where null means "no data" rather than DNF. Passing
+ * those through formatMs would print DNF for an empty session, claiming every
+ * solve failed when there are no solves at all.
+ */
+function fmtStat(v: number | null | undefined): string {
+  return v == null ? '—' : formatMs(v)
 }
 
 function Stat({ label, value, title }: { label: string; value: string; title?: string }) {
