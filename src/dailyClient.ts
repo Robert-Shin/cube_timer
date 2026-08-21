@@ -34,47 +34,61 @@ export async function revealDaily(event: EventId): Promise<Reveal> {
 }
 
 /**
+ * Terminal SQLSTATEs: the server has definitively refused this submission and
+ * will refuse it forever.
+ *
+ * - CS001: already submitted. The first write won.
+ * - P0001: every business-logic rejection `submit_daily` raises ('not signed
+ *   in', 'unknown penalty', 'time_ms must be positive', 'no attempt: reveal
+ *   the scramble first', 'submitted time exceeds elapsed time since reveal').
+ *   They carry no distinguishing code, but P0001 here can only come from our
+ *   own function, and every condition it raises is permanent.
+ *
+ * Deliberately NOT a "has a code, so the server decided" rule. Plenty of codes
+ * are transient -- PGRST301 (expired JWT, which happens on an ordinary timer),
+ * 40001 (serialization failure), 40P01 (deadlock) -- and discarding one of
+ * those destroys the user's single result for the day with no way to resubmit,
+ * because the attempt row is already revealed. Retrying something doomed is
+ * merely wasteful; discarding something recoverable is not recoverable. So an
+ * unfamiliar error must default to retry.
+ */
+const TERMINAL_CODES = new Set(['CS001', 'P0001'])
+
+/**
  * 'accepted' — the server took it.
  * 'settled'  — it was already submitted; the first write won, stop retrying.
  * 'rejected' — the server refused it permanently; retrying can never help.
- * 'retry'    — transport failure; the caller queues it.
- *
- * The mapping is a whitelist for 'retry', not a catch-all. `submit_daily`
- * raises several permanent conditions with no custom SQLSTATE ('not signed
- * in', 'unknown penalty', 'time_ms must be positive', 'no attempt: reveal the
- * scramble first', 'submitted time exceeds elapsed time since reveal') which
- * all surface as PostgREST P0001. Treating those as retryable put a doomed
- * item in the queue forever, firing one hopeless RPC per sync tick: a server
- * that answered is a server that decided, so only a failure to *reach* it can
- * be retried.
+ * 'retry'    — could not be delivered, or an unrecognised failure; requeue it.
  */
+export function classifySubmitError(
+  error: { code?: string | null; message?: string } | null,
+): 'accepted' | 'settled' | 'rejected' | 'retry' {
+  if (!error) return 'accepted'
+  // Matched on a stable SQLSTATE rather than the message text: error wording
+  // changes silently, and a missed 'settled' retries forever. The message
+  // fallback stays for a server predating the custom code.
+  if (error.code === 'CS001' || /already submitted/i.test(error.message ?? '')) return 'settled'
+  return TERMINAL_CODES.has(error.code ?? '') ? 'rejected' : 'retry'
+}
+
 export async function submitDaily(
   event: EventId,
   timeMs: number,
   penalty: Penalty,
 ): Promise<'accepted' | 'settled' | 'rejected' | 'retry'> {
   if (!supabase) return 'retry'
-  let error
   try {
-    ;({ error } = await supabase.rpc('submit_daily', {
+    const { error } = await supabase.rpc('submit_daily', {
       p_event: event,
       p_time_ms: Math.round(timeMs),
       p_penalty: penalty,
-    }))
+    })
+    return classifySubmitError(error)
   } catch {
-    // A thrown rejection is the fetch layer failing outright — never a
+    // A thrown rejection is the fetch layer failing outright -- never a
     // decision by the server.
     return 'retry'
   }
-  if (!error) return 'accepted'
-  // 'settled' means the first write won, so the queue must stop retrying.
-  // Matched on a stable SQLSTATE rather than the message text: error wording
-  // changes silently, and a missed 'settled' retries forever.
-  if (error.code === 'CS001' || /already submitted/i.test(error.message)) return 'settled'
-  // supabase-js reports a transport failure as an error with no SQLSTATE;
-  // anything carrying a code came from Postgres and is a real decision.
-  if (!error.code) return 'retry'
-  return 'rejected'
 }
 
 /** Retries every queued submission. Safe to call on any sync tick. */
