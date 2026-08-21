@@ -48,7 +48,11 @@ export async function submitDaily(
     p_penalty: penalty,
   })
   if (!error) return 'accepted'
-  return /already submitted/i.test(error.message) ? 'settled' : 'retry'
+  // 'settled' means the first write won, so the queue must stop retrying.
+  // Matched on a stable SQLSTATE rather than the message text: error wording
+  // changes silently, and a missed 'settled' retries forever.
+  if (error.code === 'CS001' || /already submitted/i.test(error.message)) return 'settled'
+  return 'retry'
 }
 
 /** Retries every queued submission. Safe to call on any sync tick. */
