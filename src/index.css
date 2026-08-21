@@ -1560,3 +1560,15 @@ kbd {
 .sync-dot.idle { background: var(--s3); }
 .sync-dot.syncing { background: var(--s4); }
 .sync-dot.error { background: var(--danger); }
+
+/* ---- daily challenge --------------------------------------------------- */
+.challenge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  text-align: center;
+  max-width: 46ch;
+  margin: 0 auto;
+}
+.challenge h2 { font-size: var(--t-lg); font-weight: 600; color: var(--text); margin: 0; }

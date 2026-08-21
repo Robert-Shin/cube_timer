@@ -24,6 +24,7 @@ import { ParityBreakdown } from './ParityBreakdown'
 import { hasParity, parityTags, type ParityId } from './parity'
 import { StatsPane } from './StatsPane'
 import { suggestGoal } from './stats'
+import { DailyChallenge } from './DailyChallenge'
 
 export default function App() {
   const [store, setStore] = useState<Store>(() => loadStore())
@@ -31,7 +32,7 @@ export default function App() {
   const [scramble, setScramble] = useState('')
   const [scrambling, setScrambling] = useState(true)
   const [typed, setTyped] = useState('')
-  const [tab, setTab] = useState<'timer' | 'stats'>('timer')
+  const [tab, setTab] = useState<'timer' | 'stats' | 'daily'>('timer')
   const [showSettings, setShowSettings] = useState(false)
   const [showSessions, setShowSessions] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -330,6 +331,11 @@ export default function App() {
             <button className={tab === 'stats' ? 'active' : ''} onClick={() => setTab('stats')}>
               Stats
             </button>
+            {syncConfigured && (
+              <button className={tab === 'daily' ? 'active' : ''} onClick={() => setTab('daily')}>
+                Daily
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -533,7 +539,7 @@ export default function App() {
                 </span>
               </div>
             </>
-          ) : (
+          ) : tab === 'stats' ? (
         <div className="stats-view dimmable">
           <section className="panel">
             <div className="panel-head">
@@ -614,6 +620,31 @@ export default function App() {
             </section>
           )}
         </div>
+          ) : (
+            <DailyChallenge
+              event={session.event}
+              onRecord={(timeMs, scrambleUsed) => {
+                // An ordinary local solve: no new column on `solves`, because
+                // the attempt row server-side is the authoritative record of
+                // the challenge.
+                setStore((prev) => ({
+                  ...prev,
+                  solves: [
+                    {
+                      id: crypto.randomUUID(),
+                      sessionId: session.id,
+                      scramble: scrambleUsed,
+                      timeMs,
+                      penalty: 'none' as Penalty,
+                      createdAt: Date.now(),
+                      updatedAt: Date.now(),
+                      parity: [] as ParityId[],
+                    },
+                    ...prev.solves,
+                  ],
+                }))
+              }}
+            />
           )}
         </section>
 
