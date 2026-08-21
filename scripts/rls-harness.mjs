@@ -133,6 +133,29 @@ for (const table of REQUIRED_TABLES) {
   }
 }
 
+// Same reasoning extended to the two challenge functions: calling them with
+// the service-role client has no user session, so auth.uid() is null and
+// both functions raise 'not signed in' as their very first statement --
+// before either touches a row -- so this probe never writes anything. A
+// missing function instead reports PGRST202 ("Could not find the function
+// ... in the schema cache"), which is the only outcome that fails the
+// preflight. Any other error is a business-logic error, which proves the
+// function exists and ran. Without this, dropping reveal_daily or
+// submit_daily would make their assertions below pass vacuously: a missing
+// function also returns an error, and expectError-shaped checks can't tell
+// "rejected for the reason under test" from "doesn't exist at all".
+const REQUIRED_FUNCTIONS = [
+  { name: 'reveal_daily', args: { p_event: '__preflight_probe__' } },
+  { name: 'submit_daily', args: { p_event: '__preflight_probe__', p_time_ms: 0, p_penalty: 'none' } },
+]
+for (const { name, args } of REQUIRED_FUNCTIONS) {
+  const { error } = await admin.rpc(name, args)
+  if (error?.code === 'PGRST202') {
+    console.error(`PREFLIGHT FAILED: required function "${name}" does not exist. Apply supabase/schema.sql before running the RLS harness.`)
+    process.exit(1)
+  }
+}
+
 try {
   const stamp = Date.now()
   const a = await asUser(`rls-a-${stamp}@example.test`)
@@ -223,6 +246,66 @@ try {
     for (const row of data ?? []) {
       assert(!('email' in row), 'profiles exposed an email column')
     }
+  })
+
+  // A scramble must exist for the day before reveal can return one.
+  await admin.from('daily_scrambles')
+    .upsert({ event: '444', utc_day: today, scramble: 'R U R2 Fw2 Uw' })
+    .throwOnError()
+
+  await check('reveal returns the scramble and creates the commitment', async () => {
+    const { data, error } = await b.client.rpc('reveal_daily', { p_event: '444' })
+    assert(!error, `reveal failed: ${error?.message}`)
+    assert(data[0].scramble === 'R U R2 Fw2 Uw', 'wrong scramble returned')
+    assert(data[0].submitted === false, 'a fresh attempt claimed to be submitted')
+  })
+
+  await check('revealing twice is idempotent and returns the same scramble', async () => {
+    const { data, error } = await b.client.rpc('reveal_daily', { p_event: '444' })
+    assert(!error, `second reveal failed: ${error?.message}`)
+    assert(data[0].scramble === 'R U R2 Fw2 Uw', 'second reveal changed the scramble')
+  })
+
+  await check('submitting with no attempt is rejected', async () => {
+    const { error } = await b.client.rpc('submit_daily', {
+      p_event: '555', p_time_ms: 30000, p_penalty: 'none',
+    })
+    assert(!!error, 'submitted for an event that was never revealed')
+  })
+
+  await check('a time longer than the elapsed wall clock is rejected', async () => {
+    const { error } = await b.client.rpc('submit_daily', {
+      p_event: '444', p_time_ms: 86_400_000, p_penalty: 'none',
+    })
+    assert(!!error, 'accepted a 24-hour solve seconds after reveal')
+  })
+
+  // A real attempt spends its duration between reveal and submit, so the
+  // elapsed-time guard always has room. This test does not -- it reveals and
+  // submits back to back -- so it has to manufacture that room explicitly: a
+  // short wait, then a claimed time comfortably below it. Do not replace
+  // this with a "realistic" solve time; the guard in submit_daily is real
+  // and correctly rejects a claimed time it can't have had.
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+
+  await check('the first submission is accepted', async () => {
+    const { error } = await b.client.rpc('submit_daily', {
+      p_event: '444', p_time_ms: 900, p_penalty: 'none',
+    })
+    assert(!error, `first submission rejected: ${error?.message}`)
+  })
+
+  await check('a second submission is rejected', async () => {
+    const { error } = await b.client.rpc('submit_daily', {
+      p_event: '444', p_time_ms: 9999, p_penalty: 'none',
+    })
+    assert(!!error, 'a result was overwritten — it must be immutable')
+  })
+
+  await check('a result from a user who has not opted in stays unpublished', async () => {
+    const { data } = await admin.from('daily_attempts').select('published')
+      .eq('user_id', b.userId).eq('event', '444').eq('utc_day', today)
+    assert(data[0].published === false, 'published without opting in')
   })
 } finally {
   // Removing the users cascades to their rows. Runs even on a thrown setup

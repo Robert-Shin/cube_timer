@@ -186,3 +186,94 @@ create policy bests_write_own on public.daily_bests
                  where p.user_id = auth.uid() and p.opted_in)
     )
   );
+
+-- ------------------------------------------------------ challenge functions
+-- security definer: these run as the owner and bypass RLS, which is the only
+-- way to hand out a scramble and record the commitment in one transaction.
+-- search_path is pinned so a caller cannot shadow a referenced object.
+
+create or replace function public.reveal_daily(p_event text)
+returns table (scramble text, revealed_at timestamptz, submitted boolean)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_day date := (now() at time zone 'utc')::date;
+begin
+  if v_uid is null then
+    raise exception 'not signed in';
+  end if;
+
+  -- Opting in governs publication, not participation: someone may take the
+  -- daily privately, so this deliberately does not check profiles.opted_in.
+
+  insert into public.daily_attempts (user_id, event, utc_day)
+  values (v_uid, p_event, v_day)
+  on conflict (user_id, event, utc_day) do nothing;
+
+  return query
+  select s.scramble, a.revealed_at, a.submitted_at is not null
+  from public.daily_attempts a
+  join public.daily_scrambles s
+    on s.event = a.event and s.utc_day = a.utc_day
+  where a.user_id = v_uid and a.event = p_event and a.utc_day = v_day;
+end;
+$$;
+
+create or replace function public.submit_daily(
+  p_event text, p_time_ms integer, p_penalty text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_day date := (now() at time zone 'utc')::date;
+  v_attempt public.daily_attempts%rowtype;
+  v_opted boolean;
+begin
+  if v_uid is null then
+    raise exception 'not signed in';
+  end if;
+  if p_penalty not in ('none', 'plus2', 'dnf') then
+    raise exception 'unknown penalty %', p_penalty;
+  end if;
+
+  select * into v_attempt from public.daily_attempts
+  where user_id = v_uid and event = p_event and utc_day = v_day;
+
+  if not found then
+    raise exception 'no attempt: reveal the scramble first';
+  end if;
+  if v_attempt.submitted_at is not null then
+    -- Custom SQLSTATE, not just a message: the client decides "the first
+    -- write won, stop retrying" from this, and matching on message text
+    -- would silently retry forever the day the wording changed.
+    raise exception 'already submitted' using errcode = 'CS001';
+  end if;
+  -- Impossible rather than merely suspicious: no solve can be longer than the
+  -- wall clock since the scramble was handed out.
+  if p_time_ms > extract(epoch from (now() - v_attempt.revealed_at)) * 1000 then
+    raise exception 'submitted time exceeds elapsed time since reveal';
+  end if;
+
+  select coalesce(opted_in, false) into v_opted
+  from public.profiles where user_id = v_uid;
+
+  update public.daily_attempts
+  set submitted_at = now(),
+      time_ms      = p_time_ms,
+      penalty      = p_penalty,
+      published    = coalesce(v_opted, false)
+  where user_id = v_uid and event = p_event and utc_day = v_day;
+end;
+$$;
+
+revoke all on function public.reveal_daily(text) from public;
+revoke all on function public.submit_daily(text, integer, text) from public;
+grant execute on function public.reveal_daily(text) to authenticated;
+grant execute on function public.submit_daily(text, integer, text) to authenticated;
