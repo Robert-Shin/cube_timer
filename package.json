@@ -11,7 +11,8 @@
     "typecheck": "tsc -b --force",
     "test": "vitest run",
     "schema": "node scripts/apply-schema.mjs",
-    "rls": "node scripts/rls-harness.mjs"
+    "rls": "node scripts/rls-harness.mjs",
+    "scrambles": "node scripts/generate-scrambles.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
