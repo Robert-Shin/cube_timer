@@ -38,6 +38,10 @@ import { createClient } from '@supabase/supabase-js'
 import { randomScrambleForEvent } from 'cubing/scramble'
 
 // Must match the event list the rest of the daily-challenge feature uses.
+// MIRRORED in src/challengeEvents.ts (CHALLENGE_EVENTS): this file is plain
+// .mjs and cannot import a .ts module, so the list exists twice on purpose.
+// Change one, change the other -- the engine only publishes daily bests for
+// events that appear in both.
 const EVENTS = ['222', '333', '444', '555', '666', '777', 'minx', 'pyram', 'skewb', 'sq1', 'clock']
 
 function readEnv(file) {

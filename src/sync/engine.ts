@@ -5,6 +5,7 @@ import type { Store } from '../storage'
 import { mergeRows, dirtyRows, newestFirst } from './merge'
 import { rowToSession, rowToSolve, sessionToRow, solveToRow } from './rows'
 import { flushQueue, publishBestOfDay } from '../dailyClient'
+import { isChallengeEvent } from '../challengeEvents'
 
 export type SyncState = 'disabled' | 'signed-out' | 'idle' | 'syncing' | 'error'
 
@@ -138,8 +139,15 @@ export function useSync(store: Store, applyRemote: (next: Store) => void) {
       try {
         // Derived from local state each time, so a deleted or DNF-ed solve
         // corrects the published row without a separate retraction path.
+        // Tombstoned sessions are deliberately included. Dropping a deleted
+        // session's event from this set would stop publishBestOfDay from ever
+        // running for it again, so an already-published row would sit on the
+        // public board for the rest of the UTC day with no solves behind it.
+        // Retraction *is* a publish call that finds no best and deletes.
+        // Filtered to the events that actually have a board: publishing for
+        // 333oh/333bf/… only writes rows no query ever reads.
         const events = new Set(
-          storeRef.current.sessions.filter((s) => !s.deleted).map((s) => s.event),
+          storeRef.current.sessions.map((s) => s.event).filter(isChallengeEvent),
         )
         for (const event of events) {
           await publishBestOfDay(
