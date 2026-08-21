@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --force",
     "test": "vitest run",
-    "schema": "node scripts/apply-schema.mjs"
+    "schema": "node scripts/apply-schema.mjs",
+    "rls": "node scripts/rls-harness.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
