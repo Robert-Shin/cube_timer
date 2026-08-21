@@ -148,20 +148,18 @@ export async function publishBestOfDay(solves: Solve[], event: EventId): Promise
     return
   }
 
+  // daily_bests has no `scramble` column: it used to leak the day's shared
+  // scramble to any anon-key holder (a challenge result is stored locally as
+  // an ordinary solve carrying that scramble, and this was writing it into a
+  // world-readable table), which would have let anyone read the scramble
+  // before committing, practise it, and post a cold time -- voiding the
+  // whole reveal-is-the-commitment design. The column is now dropped from
+  // the schema, so there is nothing to write here.
   await supabase.from('daily_bests').upsert({
     user_id: userId,
     event,
     utc_day: day,
     time_ms: Math.round(best.ms),
-    // Never a real scramble. daily_bests is world-readable to any anon-key
-    // holder (`bests_select_board` is `using (published)`), and a challenge
-    // result is stored locally as an ordinary solve carrying the day's SHARED
-    // scramble -- so for anyone who only does the daily, their best of the day
-    // *is* the challenge solve. Publishing it would let anyone read the
-    // scramble before committing, practise it, and post a cold time, which
-    // voids the whole reveal-is-the-commitment design. The column is never
-    // read back (fetchBoard selects user_id and time_ms only).
-    scramble: '',
     updated_at: new Date().toISOString(),
     published: profile?.opted_in ?? false,
   })

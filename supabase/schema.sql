@@ -123,11 +123,18 @@ create table if not exists public.daily_bests (
   event       text not null,
   utc_day     date not null,
   time_ms     integer not null,
-  scramble    text not null default '',
   updated_at  timestamptz not null,
   published   boolean not null default false,
   primary key (user_id, event, utc_day)
 );
+
+-- `scramble` used to leak the day's shared scramble to anyone: a daily
+-- challenge result is stored locally as an ordinary solve carrying that
+-- scramble, and publishBestOfDay wrote it into this world-readable table. The
+-- client now writes '' and nothing reads the column (fetchBoard selects only
+-- user_id and time_ms). Dropping it removes the leak path entirely -- no
+-- future write can reintroduce it if the column doesn't exist.
+alter table public.daily_bests drop column if exists scramble;
 
 create index if not exists daily_attempts_board
   on public.daily_attempts (event, utc_day, time_ms)
@@ -141,14 +148,41 @@ alter table public.daily_scrambles enable row level security;
 alter table public.daily_attempts  enable row level security;
 alter table public.daily_bests     enable row level security;
 
--- Usernames are public so a board can name people. Nothing else is: the
--- email lives in auth.users, which PostgREST does not expose.
+-- Usernames are public so a board can name people, but only to a signed-in
+-- caller -- the spec's decision is "who can read the board: anyone signed
+-- in", not the general public holding the (by-design public) anon key.
+-- `auth.uid() is not null` is used consistently here and below rather than
+-- `to authenticated`, so every board-facing policy is greppable by the same
+-- pattern.
 drop policy if exists profiles_select on public.profiles;
-create policy profiles_select on public.profiles for select using (true);
+create policy profiles_select on public.profiles
+  for select using (auth.uid() is not null);
 
 drop policy if exists profiles_write on public.profiles;
 create policy profiles_write on public.profiles
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- Row-level policy is not column-level: `using (true)` never leaked more than
+-- `username` only because the table happened to have no other columns. Phase
+-- 1 owns this table and will add columns, and each new one would go public
+-- with no policy change to review. So belt-and-suspenders it with an
+-- explicit column-level grant, replacing PostgREST's default table-wide
+-- grant. Guarded so this block is safe to re-run.
+--
+-- opted_in is granted too, not withheld: profiles_write already lets the
+-- owner read/write their own full row via `using/with check (auth.uid() =
+-- user_id)`, so withholding the SELECT grant on this column would only break
+-- that owner path while a non-owner still learns opted_in indirectly the
+-- moment it flips a row's presence on the board (bests_select_board /
+-- attempts_select_board are keyed off publication, which requires opted_in).
+-- Granting it column-wide reveals nothing a signed-in caller can't already
+-- infer from the board.
+revoke all on public.profiles from anon;
+revoke all on public.profiles from authenticated;
+grant select (user_id, username, opted_in) on public.profiles to authenticated;
+grant insert (user_id, username, opted_in) on public.profiles to authenticated;
+grant update (user_id, username, opted_in) on public.profiles to authenticated;
+grant delete on public.profiles to authenticated;
 
 -- daily_scrambles: no policy at all. RLS with zero policies denies everything,
 -- which is the intent. security definer functions bypass it.
@@ -158,10 +192,11 @@ create policy attempts_select_own on public.daily_attempts
   for select using (auth.uid() = user_id);
 
 -- A revealed-but-unsubmitted attempt stays private, so an unfinished solve is
--- not visible to anyone as a gap.
+-- not visible to anyone as a gap. Also requires a signed-in caller: the
+-- board is for signed-in users only, per spec, not the public anon key.
 drop policy if exists attempts_select_board on public.daily_attempts;
 create policy attempts_select_board on public.daily_attempts
-  for select using (published and submitted_at is not null);
+  for select using (auth.uid() is not null and published and submitted_at is not null);
 
 -- No insert/update/delete policy: writes go only through the functions.
 
@@ -171,7 +206,7 @@ create policy bests_select_own on public.daily_bests
 
 drop policy if exists bests_select_board on public.daily_bests;
 create policy bests_select_board on public.daily_bests
-  for select using (published);
+  for select using (auth.uid() is not null and published);
 
 -- `not published or opted_in`: without this a client could publish its own
 -- row by setting the column, bypassing the opt-in entirely.

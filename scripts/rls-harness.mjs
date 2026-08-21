@@ -196,6 +196,11 @@ try {
   const stamp = Date.now()
   const a = await asUser(`rls-a-${stamp}@example.test`)
   const b = await asUser(`rls-b-${stamp}@example.test`)
+  // A plain anon-key client with no session at all -- the shape of an
+  // attacker who has only the public bundle and never signed in. Every
+  // board-facing select policy must require auth.uid() is not null; these
+  // are the assertions that catch a policy that forgot to.
+  const anon = createClient(URL_, ANON, { auth: { persistSession: false } })
 
   // A owns one session and one solve.
   const sessionId = randomUUID()
@@ -251,6 +256,26 @@ try {
     seededProfiles.push(a.userId)
   })
 
+  // A real row exists at this point (seeded just above), so either outcome
+  // below is RLS/grants actually blocking it, not just "no rows to leak".
+  // Unlike expectEmpty, a permission-denied error here is an ACCEPTABLE pass
+  // alongside an empty result -- not a failure to relax back to expectEmpty.
+  // The anon role has no column grant on profiles at all, so Postgres denies
+  // the query outright rather than filtering it to zero rows via RLS; denied
+  // is the stronger outcome and exactly what we want. Only rows actually
+  // coming back should fail this assertion.
+  await check(
+    'an unauthenticated client cannot read profiles at all (empty result or permission-denied are both acceptable)',
+    async () => {
+      const { data, error } = await anon.from('profiles').select('*')
+      if (error) {
+        assert(error.code === '42501', `expected a permission-denied error, got ${error.code}: ${error.message}`)
+        return
+      }
+      assert((data ?? []).length === 0, `leaked ${(data ?? []).length} row(s)`)
+    },
+  )
+
   await expectEmpty(
     "B cannot see A's unsubmitted attempt",
     b.client.from('daily_attempts').select('*').eq('user_id', a.userId),
@@ -266,6 +291,29 @@ try {
       .eq('user_id', a.userId).eq('event', SENTINEL_EVENT_SEED)
     assert(!error, `unexpected error ${error?.message}`)
     assert(data.length === 1 && data[0].time_ms === 9990, 'published attempt was not readable')
+  })
+
+  // This is the assertion that proves Finding A is fixed: the row above is
+  // published and submitted -- exactly the board-visible shape -- yet an
+  // unauthenticated client must still see nothing, because
+  // attempts_select_board now requires auth.uid() is not null.
+  await expectEmpty(
+    'an unauthenticated client cannot read a published attempt on the board',
+    anon.from('daily_attempts').select('*').eq('user_id', a.userId),
+  )
+
+  await check('an authenticated user can still read the board (fix does not break the feature)', async () => {
+    const { data: attemptData, error: attemptError } = await b.client
+      .from('daily_attempts').select('time_ms')
+      .eq('user_id', a.userId).eq('event', SENTINEL_EVENT_SEED)
+    assert(!attemptError, `attempts: unexpected error ${attemptError?.message}`)
+    assert(attemptData.length === 1, 'a signed-in caller could not read a published attempt')
+
+    const { data: profileData, error: profileError } = await b.client
+      .from('profiles').select('user_id, username')
+      .eq('user_id', a.userId)
+    assert(!profileError, `profiles: unexpected error ${profileError?.message}`)
+    assert(profileData.length === 1, 'a signed-in caller could not read profiles for the board')
   })
 
   await expectError(
@@ -310,6 +358,12 @@ try {
     assert(data.length === 1 && data[0].time_ms === 7777, 'a published best was not visible to another user')
   })
 
+  await expectEmpty(
+    'an unauthenticated client cannot read a published best on the board',
+    anon.from('daily_bests').select('*')
+      .eq('user_id', a.userId).eq('event', SENTINEL_EVENT_SEED).eq('utc_day', today),
+  )
+
   await check('withdrawing opted_in blocks the next published write', async () => {
     await admin.from('profiles').update({ opted_in: false }).eq('user_id', a.userId).throwOnError()
     const row = { user_id: a.userId, event: SENTINEL_EVENT_OPTOUT, utc_day: today }
@@ -324,8 +378,13 @@ try {
     // Each source must actually return rows, or "no email in the results" is
     // true only because there were no results -- which is how this check used
     // to pass without ever running its assertion.
+    // profiles uses the explicitly granted columns, not '*': the
+    // column-level grant only covers (user_id, username, opted_in), and
+    // select('*') requires SELECT on every column, so '*' is denied outright
+    // now -- see the dedicated assertion right after this one, which is the
+    // regression test for that property.
     const sources = [
-      ['profiles', await b.client.from('profiles').select('*')],
+      ['profiles', await b.client.from('profiles').select('user_id, username, opted_in')],
       ['daily_attempts', await b.client.from('daily_attempts').select('*')],
       ['daily_bests', await b.client.from('daily_bests').select('*')],
     ]
@@ -336,6 +395,31 @@ try {
         assert(!('email' in row), `${table} exposed an email column`)
       }
     }
+
+    // Extended to the unauthenticated client's own attempts query. This one
+    // is expected to come back empty now that attempts_select_board requires
+    // a signed-in caller, so it can't use the "must return rows" shape above
+    // -- but if that policy ever regressed and started leaking rows again,
+    // this still catches an email column riding along with them.
+    const { data: anonAttempts, error: anonError } = await anon
+      .from('daily_attempts').select('*')
+    assert(!anonError || anonError.code === 'PGRST116', `daily_attempts (unauthenticated): unexpected error ${anonError?.message}`)
+    for (const row of anonAttempts ?? []) {
+      assert(!('email' in row), 'daily_attempts (unauthenticated) exposed an email column')
+    }
+  })
+
+  // The regression test for phase 1: profiles is column-granted to exactly
+  // (user_id, username, opted_in), so `select('*')` -- which requires SELECT
+  // on every column -- must be denied even for a signed-in caller reading
+  // their OWN row, which RLS alone would happily allow. This is what stops a
+  // column phase 1 adds later from becoming public by default: it would need
+  // its own deliberate grant to be readable at all, '*' or otherwise.
+  await check('select * on profiles is denied, so a new column is not public by default', async () => {
+    const { data, error } = await a.client.from('profiles').select('*').eq('user_id', a.userId)
+    assert(!!error, 'select(*) on profiles succeeded -- the column grant is not restricting it')
+    assert(error.code === '42501', `expected a permission-denied error, got ${error.code}: ${error.message}`)
+    assert(!data, 'select(*) returned data alongside an error')
   })
 
   // A scramble must exist for the day before reveal can return one. Seeded
