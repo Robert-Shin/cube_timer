@@ -200,7 +200,7 @@ export default function App() {
     showSettings ||
     showAuth ||
     pendingParity !== null
-  const { state, display } = useTimer(record, !typing && !modalOpen)
+  const { state, display } = useTimer(record, tab === 'timer' && !typing && !modalOpen)
 
   const submitTyped = (e: React.FormEvent) => {
     e.preventDefault()
