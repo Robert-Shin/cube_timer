@@ -3,6 +3,8 @@
  * it. Kept apart from dailyClient.ts, which owns the daily tables.
  */
 
+import { supabase } from './supabase'
+
 /** Mirrors the `profiles_username_format` check constraint in schema.sql. */
 const SHAPE = /^[A-Za-z0-9]+( [A-Za-z0-9]+)*$/
 
@@ -38,4 +40,65 @@ export function classifyClaimError(err: { code?: string } | null): ClaimResult {
   if (err.code === '23505') return 'taken'
   if (err.code === '23514') return 'invalid'
   return 'retry'
+}
+
+export interface Profile {
+  username: string
+  optedIn: boolean
+}
+
+/**
+ * Null means "no name yet" — which, because the row is only created at claim
+ * time, is the same state as "no row". Not being signed in also lands here; the
+ * caller only renders the claim gate when there is a session, so the two never
+ * need telling apart.
+ */
+export async function fetchProfile(): Promise<Profile | null> {
+  if (!supabase) return null
+  const { data: auth } = await supabase.auth.getUser()
+  const userId = auth.user?.id
+  if (!userId) return null
+
+  const { data } = await supabase
+    .from('profiles')
+    .select('username, opted_in')
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (!data?.username) return null
+  return { username: data.username, optedIn: data.opted_in ?? false }
+}
+
+/**
+ * Claims a name, and renames on a row that already exists. `opted_in` is
+ * deliberately absent from the payload: on conflict PostgREST updates only the
+ * columns given, so a rename preserves the opt-in rather than silently
+ * resetting it to the column default.
+ */
+export async function claimUsername(name: string): Promise<ClaimResult> {
+  if (!supabase) return 'retry'
+  const { data: auth } = await supabase.auth.getUser()
+  const userId = auth.user?.id
+  if (!userId) return 'retry'
+
+  const { error } = await supabase
+    .from('profiles')
+    .upsert({ user_id: userId, username: name }, { onConflict: 'user_id' })
+
+  return classifyClaimError(error)
+}
+
+/** True on success. The caller keeps its old state on false. */
+export async function setOptIn(value: boolean): Promise<boolean> {
+  if (!supabase) return false
+  const { data: auth } = await supabase.auth.getUser()
+  const userId = auth.user?.id
+  if (!userId) return false
+
+  const { error } = await supabase
+    .from('profiles')
+    .update({ opted_in: value })
+    .eq('user_id', userId)
+
+  return !error
 }

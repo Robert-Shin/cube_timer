@@ -215,3 +215,28 @@ export async function fetchBoard(event: EventId, day: string): Promise<BoardRow[
     }))
     .sort((a, b) => (a.challengeMs ?? Infinity) - (b.challengeMs ?? Infinity))
 }
+
+/**
+ * Whether today's opt-in setting is already spoken for. `submit_daily` freezes
+ * `published` at submission time, so once any attempt is in, the setting can no
+ * longer describe today's board and the UI stops offering to change it.
+ *
+ * No event filter: an attempt row can only exist for an event that had a
+ * scramble to reveal, which is exactly the challenge events.
+ */
+export async function hasSubmittedToday(): Promise<boolean> {
+  if (!supabase) return false
+  const { data: auth } = await supabase.auth.getUser()
+  const userId = auth.user?.id
+  if (!userId) return false
+
+  const { data } = await supabase
+    .from('daily_attempts')
+    .select('user_id')
+    .eq('user_id', userId)
+    .eq('utc_day', utcDay(Date.now()))
+    .not('submitted_at', 'is', null)
+    .limit(1)
+
+  return (data ?? []).length > 0
+}
