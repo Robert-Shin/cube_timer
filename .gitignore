@@ -19,3 +19,6 @@ cstimer_*.txt
 
 # Supabase CLI scratch
 supabase/.temp/
+
+# Worktrees created by the harness
+.claude/worktrees/
