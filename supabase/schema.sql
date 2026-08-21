@@ -82,3 +82,107 @@ create policy solves_update on public.solves
 drop policy if exists solves_delete on public.solves;
 create policy solves_delete on public.solves
   for delete using (auth.uid() = user_id);
+
+-- ---------------------------------------------------------------- profiles
+-- Phase 1 owns the profile UI and any further columns; this guarded block is
+-- the minimum the daily challenge needs to exist against.
+create table if not exists public.profiles (
+  user_id     uuid primary key references auth.users(id) on delete cascade,
+  username    text unique,
+  opted_in    boolean not null default false,
+  created_at  timestamptz not null default now()
+);
+
+-- --------------------------------------------------- daily challenge tables
+-- One row per event per UTC day, written only by the Edge Function's service
+-- role. There is deliberately no select policy: a client that could read this
+-- table could practise the scramble before committing to its attempt.
+create table if not exists public.daily_scrambles (
+  event       text not null,
+  utc_day     date not null,
+  scramble    text not null,
+  created_at  timestamptz not null default now(),
+  primary key (event, utc_day)
+);
+
+create table if not exists public.daily_attempts (
+  user_id       uuid not null references auth.users(id) on delete cascade,
+  event         text not null,
+  utc_day       date not null,
+  revealed_at   timestamptz not null default now(),
+  submitted_at  timestamptz,
+  time_ms       integer,
+  penalty       text not null default 'none'
+                  check (penalty in ('none', 'plus2', 'dnf')),
+  published     boolean not null default false,
+  primary key (user_id, event, utc_day)
+);
+
+create table if not exists public.daily_bests (
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  event       text not null,
+  utc_day     date not null,
+  time_ms     integer not null,
+  scramble    text not null default '',
+  updated_at  timestamptz not null,
+  published   boolean not null default false,
+  primary key (user_id, event, utc_day)
+);
+
+create index if not exists daily_attempts_board
+  on public.daily_attempts (event, utc_day, time_ms)
+  where published and submitted_at is not null and penalty <> 'dnf';
+create index if not exists daily_bests_board
+  on public.daily_bests (event, utc_day, time_ms)
+  where published;
+
+alter table public.profiles        enable row level security;
+alter table public.daily_scrambles enable row level security;
+alter table public.daily_attempts  enable row level security;
+alter table public.daily_bests     enable row level security;
+
+-- Usernames are public so a board can name people. Nothing else is: the
+-- email lives in auth.users, which PostgREST does not expose.
+drop policy if exists profiles_select on public.profiles;
+create policy profiles_select on public.profiles for select using (true);
+
+drop policy if exists profiles_write on public.profiles;
+create policy profiles_write on public.profiles
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- daily_scrambles: no policy at all. RLS with zero policies denies everything,
+-- which is the intent. security definer functions bypass it.
+
+drop policy if exists attempts_select_own on public.daily_attempts;
+create policy attempts_select_own on public.daily_attempts
+  for select using (auth.uid() = user_id);
+
+-- A revealed-but-unsubmitted attempt stays private, so an unfinished solve is
+-- not visible to anyone as a gap.
+drop policy if exists attempts_select_board on public.daily_attempts;
+create policy attempts_select_board on public.daily_attempts
+  for select using (published and submitted_at is not null);
+
+-- No insert/update/delete policy: writes go only through the functions.
+
+drop policy if exists bests_select_own on public.daily_bests;
+create policy bests_select_own on public.daily_bests
+  for select using (auth.uid() = user_id);
+
+drop policy if exists bests_select_board on public.daily_bests;
+create policy bests_select_board on public.daily_bests
+  for select using (published);
+
+-- `not published or opted_in`: without this a client could publish its own
+-- row by setting the column, bypassing the opt-in entirely.
+drop policy if exists bests_write_own on public.daily_bests;
+create policy bests_write_own on public.daily_bests
+  for all using (auth.uid() = user_id)
+  with check (
+    auth.uid() = user_id
+    and (
+      not published
+      or exists (select 1 from public.profiles p
+                 where p.user_id = auth.uid() and p.opted_in)
+    )
+  );

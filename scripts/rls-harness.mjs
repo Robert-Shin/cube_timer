@@ -109,6 +109,30 @@ async function expectOneRow(label, query) {
   })
 }
 
+// Preflight: confirm every table the harness depends on actually exists,
+// using the service-role client so RLS (including daily_scrambles' total
+// lack of a select policy) cannot masquerade as "table missing". This runs
+// before any assertion and is not itself an assertion -- it does not touch
+// `results`. Without it, a dropped table would make expectError/expectEmpty
+// checks pass vacuously (an error either way looks like a rejection, and no
+// rows either way looks like RLS filtering), so the whole suite could go
+// green while actually checking nothing.
+const REQUIRED_TABLES = [
+  'sessions', 'solves', 'profiles',
+  'daily_scrambles', 'daily_attempts', 'daily_bests',
+]
+for (const table of REQUIRED_TABLES) {
+  const { error } = await admin.from(table).select('*').limit(1)
+  // PostgREST reports a table missing from its schema cache as PGRST205
+  // (it never reaches raw Postgres, so the underlying 42P01 never surfaces
+  // through the REST API). Any other outcome -- no error, or an error with
+  // a different code -- means the table exists.
+  if (error?.code === 'PGRST205') {
+    console.error(`PREFLIGHT FAILED: required table "${table}" does not exist. Apply supabase/schema.sql before running the RLS harness.`)
+    process.exit(1)
+  }
+}
+
 try {
   const stamp = Date.now()
   const a = await asUser(`rls-a-${stamp}@example.test`)
@@ -139,6 +163,67 @@ try {
     "B cannot write a solve attributed to A",
     b.client.from('solves').insert({ id: randomUUID(), user_id: a.userId, session_id: sessionId, scramble: 'x', time_ms: 1, created_at: nowIso, updated_at: nowIso }),
   )
+
+  const today = new Date().toISOString().slice(0, 10)
+
+  await expectEmpty(
+    'nobody can select daily_scrambles directly',
+    b.client.from('daily_scrambles').select('*'),
+  )
+
+  // A has revealed but not submitted. Supports both the assertion right
+  // below and the published-attempt assertion after it, so it gets its own
+  // labelled check rather than crashing the run if the table is missing.
+  await check('setup: seed a revealed attempt for A', async () => {
+    await admin.from('daily_attempts').insert({
+      user_id: a.userId, event: '333', utc_day: today,
+    }).throwOnError()
+  })
+
+  await expectEmpty(
+    "B cannot see A's unsubmitted attempt",
+    b.client.from('daily_attempts').select('*').eq('user_id', a.userId),
+  )
+
+  await check('a published submitted attempt is visible to B', async () => {
+    await admin.from('daily_attempts')
+      .update({ submitted_at: new Date().toISOString(), time_ms: 9990, published: true })
+      .eq('user_id', a.userId).eq('event', '333').eq('utc_day', today)
+      .throwOnError()
+    const { data, error } = await b.client
+      .from('daily_attempts').select('time_ms')
+      .eq('user_id', a.userId).eq('event', '333')
+    assert(!error, `unexpected error ${error?.message}`)
+    assert(data.length === 1 && data[0].time_ms === 9990, 'published attempt was not readable')
+  })
+
+  await expectError(
+    'B cannot write an attempt at all',
+    b.client.from('daily_attempts').insert({ user_id: b.userId, event: '333', utc_day: today }),
+  )
+
+  await expectError(
+    'a user who has not opted in cannot publish a daily best',
+    b.client.from('daily_bests').insert({
+      user_id: b.userId, event: '333', utc_day: today,
+      time_ms: 8000, updated_at: new Date().toISOString(), published: true,
+    }),
+  )
+
+  await check('the same row is accepted unpublished', async () => {
+    const { error } = await b.client.from('daily_bests').insert({
+      user_id: b.userId, event: '333', utc_day: today,
+      time_ms: 8000, updated_at: new Date().toISOString(), published: false,
+    })
+    assert(!error, `rejected an unpublished own-row write: ${error?.message}`)
+  })
+
+  await check('no query path returns an email address', async () => {
+    const { data } = await b.client.from('profiles').select('*')
+    for (const row of data ?? []) {
+      assert(!('email' in row), 'profiles exposed an email column')
+    }
+  })
 } finally {
   // Removing the users cascades to their rows. Runs even on a thrown setup
   // or assertion error, so a failed run never orphans accounts. Each
