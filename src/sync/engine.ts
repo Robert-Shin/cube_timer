@@ -4,6 +4,7 @@ import { supabase, syncConfigured } from '../supabase'
 import type { Store } from '../storage'
 import { mergeRows, dirtyRows, newestFirst } from './merge'
 import { rowToSession, rowToSolve, sessionToRow, solveToRow } from './rows'
+import { flushQueue, publishBestOfDay } from '../dailyClient'
 
 export type SyncState = 'disabled' | 'signed-out' | 'idle' | 'syncing' | 'error'
 
@@ -129,6 +130,30 @@ export function useSync(store: Store, applyRemote: (next: Store) => void) {
 
       writeCursors(uid, { pushedAt, pulledAt })
       setLastSyncedAt(Date.now())
+
+      // Publishing the daily-challenge board is best-effort piggybacked on
+      // the sync tick, not part of the core sync guarantee: a failure here
+      // must never mark the tick as failed or block the cursor write above,
+      // which already succeeded.
+      try {
+        // Derived from local state each time, so a deleted or DNF-ed solve
+        // corrects the published row without a separate retraction path.
+        const events = new Set(
+          storeRef.current.sessions.filter((s) => !s.deleted).map((s) => s.event),
+        )
+        for (const event of events) {
+          await publishBestOfDay(
+            storeRef.current.solves.filter(
+              (s) => storeRef.current.sessions.find((x) => x.id === s.sessionId)?.event === event,
+            ),
+            event,
+          )
+        }
+        await flushQueue()
+      } catch {
+        // Best-effort: the next tick will retry from freshly-derived state.
+      }
+
       setState('idle')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'sync failed')
