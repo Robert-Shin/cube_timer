@@ -307,6 +307,34 @@ try {
       .eq('user_id', b.userId).eq('event', '444').eq('utc_day', today)
     assert(data[0].published === false, 'published without opting in')
   })
+
+  // The sequential "a second submission is rejected" check above would pass
+  // even against the racy pre-fix version of submit_daily -- both calls see
+  // the write from the first before running, because they aren't
+  // concurrent. This is the check that actually exercises the atomic
+  // `... where submitted_at is null` guard: two calls in flight at once,
+  // racing against the same row, must leave exactly one winner.
+  await check('two concurrent submissions: exactly one wins', async () => {
+    const event = '666'
+    await admin.from('daily_scrambles')
+      .upsert({ event, utc_day: today, scramble: 'R2 U2 F2' })
+      .throwOnError()
+
+    const { error: revealError } = await b.client.rpc('reveal_daily', { p_event: event })
+    assert(!revealError, `reveal before race failed: ${revealError?.message}`)
+
+    // Room for the elapsed-time guard, same as the earlier submission test.
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+
+    const [r1, r2] = await Promise.all([
+      b.client.rpc('submit_daily', { p_event: event, p_time_ms: 900, p_penalty: 'none' }),
+      b.client.rpc('submit_daily', { p_event: event, p_time_ms: 901, p_penalty: 'none' }),
+    ])
+    const succeeded = [r1, r2].filter((r) => !r.error)
+    const failed = [r1, r2].filter((r) => r.error)
+    assert(succeeded.length === 1, `expected exactly 1 winner, got ${succeeded.length}`)
+    assert(failed.length === 1, `expected exactly 1 rejection, got ${failed.length}`)
+  })
 } finally {
   // Removing the users cascades to their rows. Runs even on a thrown setup
   // or assertion error, so a failed run never orphans accounts. Each

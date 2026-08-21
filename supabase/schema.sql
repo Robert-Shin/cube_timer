@@ -209,6 +209,19 @@ begin
   -- Opting in governs publication, not participation: someone may take the
   -- daily privately, so this deliberately does not check profiles.opted_in.
 
+  -- Confirmed before the commitment is written, not after: otherwise an
+  -- event with no scramble burns the caller's one attempt slot for the day
+  -- and hands back an empty result with no error. Checked here rather than
+  -- against a hardcoded list of valid events -- that list already lives in
+  -- the edge function, and duplicating it in SQL would be a second place to
+  -- keep in sync.
+  if not exists (
+    select 1 from public.daily_scrambles
+    where event = p_event and utc_day = v_day
+  ) then
+    raise exception 'no scramble for event % today', p_event;
+  end if;
+
   insert into public.daily_attempts (user_id, event, utc_day)
   values (v_uid, p_event, v_day)
   on conflict (user_id, event, utc_day) do nothing;
@@ -242,6 +255,13 @@ begin
   if p_penalty not in ('none', 'plus2', 'dnf') then
     raise exception 'unknown penalty %', p_penalty;
   end if;
+  -- A non-positive time passes the elapsed-time guard trivially (it's
+  -- always less than any positive elapsed duration) and would land on the
+  -- board as a record, corrupting its ordering. Reject it outright, before
+  -- that guard even runs.
+  if p_time_ms <= 0 then
+    raise exception 'time_ms must be positive';
+  end if;
 
   select * into v_attempt from public.daily_attempts
   where user_id = v_uid and event = p_event and utc_day = v_day;
@@ -252,7 +272,9 @@ begin
   if v_attempt.submitted_at is not null then
     -- Custom SQLSTATE, not just a message: the client decides "the first
     -- write won, stop retrying" from this, and matching on message text
-    -- would silently retry forever the day the wording changed.
+    -- would silently retry forever the day the wording changed. This check
+    -- is only the common-case fast path -- see the WHERE clause below for
+    -- what actually enforces one-attempt-per-day against a race.
     raise exception 'already submitted' using errcode = 'CS001';
   end if;
   -- Impossible rather than merely suspicious: no solve can be longer than the
@@ -264,12 +286,27 @@ begin
   select coalesce(opted_in, false) into v_opted
   from public.profiles where user_id = v_uid;
 
+  -- The check above reads a snapshot with no lock, so two concurrent calls
+  -- can both pass it before either writes: Postgres serialises the two
+  -- UPDATEs, but EvalPlanQual only re-checks the UPDATE's own WHERE clause,
+  -- not the PL/pgSQL condition above it. Folding `submitted_at is null`
+  -- into the WHERE makes the check and the write one atomic statement, so
+  -- only the first of the two can ever match.
   update public.daily_attempts
   set submitted_at = now(),
       time_ms      = p_time_ms,
       penalty      = p_penalty,
       published    = coalesce(v_opted, false)
-  where user_id = v_uid and event = p_event and utc_day = v_day;
+  where user_id = v_uid
+    and event = p_event
+    and utc_day = v_day
+    and submitted_at is null;
+
+  if not found then
+    -- Lost the race, or a retry of a submission that already landed. Same
+    -- SQLSTATE as the pre-check, so the client stops retrying either way.
+    raise exception 'already submitted' using errcode = 'CS001';
+  end if;
 end;
 $$;
 
