@@ -16,3 +16,6 @@ cstimer_*.txt
 
 # Subagent-driven-development scratch (ledgers, briefs, review packages)
 .superpowers/
+
+# Supabase CLI scratch
+supabase/.temp/
