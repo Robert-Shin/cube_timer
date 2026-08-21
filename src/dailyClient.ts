@@ -230,13 +230,17 @@ export async function hasSubmittedToday(): Promise<boolean> {
   const userId = auth.user?.id
   if (!userId) return false
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('daily_attempts')
     .select('user_id')
     .eq('user_id', userId)
     .eq('utc_day', utcDay(Date.now()))
     .not('submitted_at', 'is', null)
     .limit(1)
+
+  // Fail open: submit_daily freezes `published` server-side at submission time,
+  // so the worst case is offering a toggle whose effect is already moot for today.
+  if (error) return false
 
   return (data ?? []).length > 0
 }

@@ -48,10 +48,9 @@ export interface Profile {
 }
 
 /**
- * Null means "no name yet" — which, because the row is only created at claim
- * time, is the same state as "no row". Not being signed in also lands here; the
- * caller only renders the claim gate when there is a session, so the two never
- * need telling apart.
+ * Throws on a genuine query error (expired JWT, network blip, RLS misconfiguration).
+ * Returns null if not signed in, or if signed in but no profile row exists yet.
+ * Returns Profile if a username has been claimed.
  */
 export async function fetchProfile(): Promise<Profile | null> {
   if (!supabase) return null
@@ -59,11 +58,13 @@ export async function fetchProfile(): Promise<Profile | null> {
   const userId = auth.user?.id
   if (!userId) return null
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('profiles')
     .select('username, opted_in')
     .eq('user_id', userId)
     .maybeSingle()
+
+  if (error) throw error
 
   if (!data?.username) return null
   return { username: data.username, optedIn: data.opted_in ?? false }
