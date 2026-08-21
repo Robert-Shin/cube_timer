@@ -623,6 +623,7 @@ export default function App() {
           ) : (
             <DailyChallenge
               event={session.event}
+              paused={modalOpen}
               onRecord={(timeMs, scrambleUsed) => {
                 // An ordinary local solve: no new column on `solves`, because
                 // the attempt row server-side is the authoritative record of

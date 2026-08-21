@@ -14,9 +14,13 @@ import { useTimer } from './useTimer'
 export function DailyChallenge({
   event,
   onRecord,
+  paused,
 }: {
   event: EventId
   onRecord: (timeMs: number, scramble: string) => void
+  /** True while a modal owns the keyboard, so space doesn't fire a phantom
+   * solve that would silently burn the day's one immutable attempt. */
+  paused: boolean
 }) {
   const [reveal, setReveal] = useState<Reveal | null>(null)
   const [result, setResult] = useState<number | null>(null)
@@ -28,7 +32,7 @@ export function DailyChallenge({
     void recordChallengeResult(event, elapsed, 'none' as Penalty)
   }
 
-  const { state, display } = useTimer(finish, reveal !== null && result === null)
+  const { state, display } = useTimer(finish, reveal !== null && result === null && !paused)
 
   const start = async () => {
     setError(null)
