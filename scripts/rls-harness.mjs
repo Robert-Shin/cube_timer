@@ -7,6 +7,11 @@
  * from the attacker's side: two real accounts, ordinary anon-key clients,
  * and no privileged access except to create the accounts themselves.
  *
+ * Every account this run creates is tracked and deleted in a `finally`, so a
+ * mid-run failure -- a real RLS regression, a transient network error, a bug
+ * -- still cleans up instead of orphaning throwaway accounts in the live
+ * Supabase project.
+ *
  *   npm run rls
  */
 import { readFileSync } from 'node:fs'
@@ -44,6 +49,10 @@ if (!URL_ || !ANON || !SERVICE) {
 
 const admin = createClient(URL_, SERVICE, { auth: { persistSession: false } })
 
+// Every account this run creates, so cleanup deletes exactly those and never
+// enumerates or touches anyone else's account.
+const createdUserIds = []
+
 const results = []
 async function check(label, fn) {
   try {
@@ -67,6 +76,9 @@ async function asUser(email) {
     email_confirm: true,
   })
   if (error) throw error
+  // Tracked immediately: even if sign-in below throws, the account still
+  // gets deleted by the top-level finally.
+  createdUserIds.push(data.user.id)
   const client = createClient(URL_, ANON, { auth: { persistSession: false } })
   const { error: signInError } = await client.auth.signInWithPassword({ email, password })
   if (signInError) throw signInError
@@ -89,33 +101,51 @@ async function expectError(label, query) {
   })
 }
 
-const stamp = Date.now()
-const a = await asUser(`rls-a-${stamp}@example.test`)
-const b = await asUser(`rls-b-${stamp}@example.test`)
+async function expectOneRow(label, query) {
+  await check(label, async () => {
+    const { data, error } = await query
+    assert(!error, `unexpected error ${error?.message}`)
+    assert((data ?? []).length === 1, `expected exactly 1 row, got ${(data ?? []).length}`)
+  })
+}
 
-// A owns one session and one solve.
-const sessionId = randomUUID()
-const solveId = randomUUID()
-const nowIso = new Date().toISOString()
-await a.client
-  .from('sessions')
-  .insert({ id: sessionId, user_id: a.userId, name: 'harness', event: '333', created_at: nowIso, updated_at: nowIso })
-  .throwOnError()
-await a.client
-  .from('solves')
-  .insert({ id: solveId, user_id: a.userId, session_id: sessionId, scramble: 'R U', time_ms: 12340, created_at: nowIso, updated_at: nowIso })
-  .throwOnError()
+try {
+  const stamp = Date.now()
+  const a = await asUser(`rls-a-${stamp}@example.test`)
+  const b = await asUser(`rls-b-${stamp}@example.test`)
 
-await expectEmpty("B cannot read A's solves", b.client.from('solves').select('*').eq('user_id', a.userId))
-await expectEmpty("B cannot read A's sessions", b.client.from('sessions').select('*').eq('user_id', a.userId))
-await expectError(
-  "B cannot write a solve attributed to A",
-  b.client.from('solves').insert({ id: randomUUID(), user_id: a.userId, session_id: sessionId, scramble: 'x', time_ms: 1, created_at: nowIso, updated_at: nowIso }),
-)
+  // A owns one session and one solve.
+  const sessionId = randomUUID()
+  const solveId = randomUUID()
+  const nowIso = new Date().toISOString()
+  await a.client
+    .from('sessions')
+    .insert({ id: sessionId, user_id: a.userId, name: 'harness', event: '333', created_at: nowIso, updated_at: nowIso })
+    .throwOnError()
+  await a.client
+    .from('solves')
+    .insert({ id: solveId, user_id: a.userId, session_id: sessionId, scramble: 'R U', time_ms: 12340, created_at: nowIso, updated_at: nowIso })
+    .throwOnError()
 
-// Cleanup: removing the users cascades to their rows.
-await admin.auth.admin.deleteUser(a.userId)
-await admin.auth.admin.deleteUser(b.userId)
+  // Positive control, checked first: without this, a filter that wrongly
+  // returns empty for everyone would still pass the cross-user assertions
+  // below for the wrong reason.
+  await expectOneRow("A can read her own session", a.client.from('sessions').select('*').eq('id', sessionId))
+  await expectOneRow("A can read her own solve", a.client.from('solves').select('*').eq('id', solveId))
+
+  await expectEmpty("B cannot read A's solves", b.client.from('solves').select('*').eq('user_id', a.userId))
+  await expectEmpty("B cannot read A's sessions", b.client.from('sessions').select('*').eq('user_id', a.userId))
+  await expectError(
+    "B cannot write a solve attributed to A",
+    b.client.from('solves').insert({ id: randomUUID(), user_id: a.userId, session_id: sessionId, scramble: 'x', time_ms: 1, created_at: nowIso, updated_at: nowIso }),
+  )
+} finally {
+  // Removing the users cascades to their rows. Runs even on a thrown setup
+  // or assertion error, so a failed run never orphans accounts.
+  for (const userId of createdUserIds) {
+    await admin.auth.admin.deleteUser(userId)
+  }
+}
 
 let failed = 0
 for (const [ok, label] of results) {
