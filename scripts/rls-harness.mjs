@@ -251,7 +251,7 @@ try {
   // whatever the schema exposed.
   await check('setup: seed a profile for A', async () => {
     await admin.from('profiles').insert({
-      user_id: a.userId, username: `harness-${stamp}`, opted_in: false,
+      user_id: a.userId, username: `h${stamp}`, opted_in: false,
     }).throwOnError()
     seededProfiles.push(a.userId)
   })
@@ -314,6 +314,33 @@ try {
       .eq('user_id', a.userId)
     assert(!profileError, `profiles: unexpected error ${profileError?.message}`)
     assert(profileData.length === 1, 'a signed-in caller could not read profiles for the board')
+  })
+
+  // Another user's profile is not writable. RLS filters the row out rather than
+  // erroring, so a silent zero-row update is the expected shape -- which is why
+  // this re-reads with the service role instead of trusting the absent error.
+  await check('user B cannot rename user A', async () => {
+    await b.client.from('profiles').update({ username: `hijack${stamp}` }).eq('user_id', a.userId)
+    const { data } = await admin.from('profiles').select('username').eq('user_id', a.userId).single()
+    assert(data.username === `h${stamp}`, `A's username became ${data.username}`)
+  })
+
+  // Case-insensitive uniqueness. Written with the service role deliberately: this
+  // must be the index refusing it, not client-side validation.
+  await check('a name differing only in case is rejected', async () => {
+    const { error } = await admin.from('profiles').insert({
+      user_id: b.userId, username: `H${stamp}`, opted_in: false,
+    })
+    if (!error) seededProfiles.push(b.userId)
+    assert(error?.code === '23505', `expected 23505, got ${error?.code ?? 'no error'}`)
+  })
+
+  await check('an ill-formed name is rejected by the check constraint', async () => {
+    const { error } = await admin.from('profiles').insert({
+      user_id: b.userId, username: 'no-hyphens-allowed', opted_in: false,
+    })
+    if (!error) seededProfiles.push(b.userId)
+    assert(error?.code === '23514', `expected 23514, got ${error?.code ?? 'no error'}`)
   })
 
   await expectError(

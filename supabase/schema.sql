@@ -93,6 +93,25 @@ create table if not exists public.profiles (
   created_at  timestamptz not null default now()
 );
 
+-- Phase 1 owns these rules. `username` stays nullable although the app never
+-- writes null: a `not null` here would make this file fail to re-run against any
+-- pre-existing row that has one, and dailyClient already falls back to
+-- 'anonymous'. The regex pins the charset AND makes leading, trailing, and
+-- doubled spaces unrepresentable, so the client's trim-and-collapse is a
+-- convenience rather than the only defence.
+alter table public.profiles drop constraint if exists profiles_username_key;
+
+alter table public.profiles drop constraint if exists profiles_username_format;
+alter table public.profiles add constraint profiles_username_format
+  check (username is null
+         or (username ~ '^[A-Za-z0-9]+( [A-Za-z0-9]+)*$'
+             and length(username) between 3 and 20));
+
+-- Case-insensitively unique: impersonation by casing is a real hazard on a
+-- public board. This subsumes the plain `unique` dropped above.
+create unique index if not exists profiles_username_lower
+  on public.profiles (lower(username));
+
 -- --------------------------------------------------- daily challenge tables
 -- One row per event per UTC day, written only by the Edge Function's service
 -- role. There is deliberately no select policy: a client that could read this
