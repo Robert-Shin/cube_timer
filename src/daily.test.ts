@@ -27,7 +27,7 @@ describe('bestOfDay', () => {
       solve({ id: 'b', timeMs: 9000 }),
       solve({ id: 'c', timeMs: 11000 }),
     ]
-    expect(bestOfDay(list, '333', day)?.solve.id).toBe('b')
+    expect(bestOfDay(list, day)?.solve.id).toBe('b')
   })
 
   it('ignores solves from other days', () => {
@@ -35,7 +35,7 @@ describe('bestOfDay', () => {
       solve({ id: 'yesterday', timeMs: 5000, createdAt: Date.UTC(2026, 7, 19, 12) }),
       solve({ id: 'today', timeMs: 9000 }),
     ]
-    expect(bestOfDay(list, '333', day)?.solve.id).toBe('today')
+    expect(bestOfDay(list, day)?.solve.id).toBe('today')
   })
 
   it('excludes DNFs and deleted solves', () => {
@@ -44,7 +44,7 @@ describe('bestOfDay', () => {
       solve({ id: 'gone', timeMs: 2000, deleted: true }),
       solve({ id: 'real', timeMs: 9000 }),
     ]
-    expect(bestOfDay(list, '333', day)?.solve.id).toBe('real')
+    expect(bestOfDay(list, day)?.solve.id).toBe('real')
   })
 
   it('ranks on the +2-adjusted time, not the raw one', () => {
@@ -52,13 +52,13 @@ describe('bestOfDay', () => {
       solve({ id: 'penalised', timeMs: 9000, penalty: 'plus2' }), // 11.00
       solve({ id: 'clean', timeMs: 10000 }),                      // 10.00
     ]
-    const best = bestOfDay(list, '333', day)
+    const best = bestOfDay(list, day)
     expect(best?.solve.id).toBe('clean')
     expect(best?.ms).toBe(10000)
   })
 
   it('returns null when the day has no usable solve', () => {
-    expect(bestOfDay([], '333', day)).toBeNull()
-    expect(bestOfDay([solve({ penalty: 'dnf' })], '333', day)).toBeNull()
+    expect(bestOfDay([], day)).toBeNull()
+    expect(bestOfDay([solve({ penalty: 'dnf' })], day)).toBeNull()
   })
 })

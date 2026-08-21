@@ -1,4 +1,4 @@
-import { effectiveMs, type EventId, type Solve } from './types'
+import { effectiveMs, type Solve } from './types'
 
 /** The UTC calendar day a timestamp falls in, as 'YYYY-MM-DD'. */
 export function utcDay(at: number): string {
@@ -11,7 +11,6 @@ export function utcDay(at: number): string {
  */
 export function bestOfDay(
   solves: Solve[],
-  _event: EventId,
   day: string,
 ): { solve: Solve; ms: number } | null {
   let best: { solve: Solve; ms: number } | null = null

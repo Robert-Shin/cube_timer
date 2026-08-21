@@ -32,7 +32,7 @@ export function Leaderboard({ event }: { event: EventId }) {
       </thead>
       <tbody>
         {rows.map((r, i) => (
-          <tr key={r.username} className={r.isSelf ? 'self' : ''}>
+          <tr key={r.userId} className={r.isSelf ? 'self' : ''}>
             <th>{i + 1}</th>
             <th>{r.username}</th>
             <td>{r.challengeMs === null ? 'DNF' : formatMs(r.challengeMs)}</td>
