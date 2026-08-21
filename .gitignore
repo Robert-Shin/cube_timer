@@ -13,3 +13,6 @@ dist-ssr
 
 # Personal cstimer exports -- test data, never commit
 cstimer_*.txt
+
+# Subagent-driven-development scratch (ledgers, briefs, review packages)
+.superpowers/
