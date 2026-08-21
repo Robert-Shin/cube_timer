@@ -3,6 +3,7 @@ import type { EventId, Penalty } from './types'
 import { formatMs } from './format'
 import { recordChallengeResult, revealDaily, type Reveal } from './dailyClient'
 import { useTimer } from './useTimer'
+import { Leaderboard } from './Leaderboard'
 
 /**
  * One committed attempt at the day's shared scramble.
@@ -68,6 +69,7 @@ export function DailyChallenge({
       <p className="hint">
         {result !== null ? 'Submitted. Come back tomorrow.' : 'Hold space to start'}
       </p>
+      {result !== null && <Leaderboard event={event} />}
     </div>
   )
 }

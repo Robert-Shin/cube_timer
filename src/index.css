@@ -1572,3 +1572,8 @@ kbd {
   margin: 0 auto;
 }
 .challenge h2 { font-size: var(--t-lg); font-weight: 600; color: var(--text); margin: 0; }
+
+/* ---- daily leaderboard -------------------------------------------------- */
+.board { margin-top: var(--sp-4); }
+.board tbody th:nth-child(2) { text-align: left; color: var(--text); font-weight: 500; }
+.board tr.self th, .board tr.self td { color: var(--pb); }
