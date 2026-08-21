@@ -141,9 +141,17 @@ try {
   )
 } finally {
   // Removing the users cascades to their rows. Runs even on a thrown setup
-  // or assertion error, so a failed run never orphans accounts.
+  // or assertion error, so a failed run never orphans accounts. Each
+  // deletion is independent: one failing (network blip, rate limit,
+  // already deleted) must not stop the others from being attempted, and
+  // must not change the script's exit code -- that reflects the
+  // assertions, not this housekeeping.
   for (const userId of createdUserIds) {
-    await admin.auth.admin.deleteUser(userId)
+    try {
+      await admin.auth.admin.deleteUser(userId)
+    } catch (e) {
+      console.warn(`WARNING: failed to delete throwaway account ${userId} — ${e.message}. Remove it manually.`)
+    }
   }
 }
 
