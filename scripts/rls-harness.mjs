@@ -68,6 +68,22 @@ const createdUserIds = []
 const SENTINEL_EVENT_MAIN = '__harness_main__'
 const SENTINEL_EVENT_NO_ATTEMPT = '__harness_no_attempt__'
 const SENTINEL_EVENT_RACE = '__harness_race__'
+// Two more sentinels for the rows this harness writes directly into
+// daily_attempts / daily_bests. Seeding those with the REAL '333' on the REAL
+// current utc_day put a fake row on the live 3x3 leaderboard for the duration
+// of every run, and left it there permanently if cleanup below failed (which
+// only warns, by design). The policies and functions are event-agnostic, so a
+// sentinel exercises them exactly as well while being unreachable from any
+// board query.
+const SENTINEL_EVENT_SEED = '__harness_seed__'
+const SENTINEL_EVENT_OPTOUT = '__harness_optout__'
+
+// Fixture rows this run writes into daily_attempts / daily_bests / profiles.
+// Deleting the throwaway accounts does cascade to all three, but the deletes
+// are also done explicitly so a failed account deletion cannot strand a row.
+const seededAttempts = []
+const seededBests = []
+const seededProfiles = []
 
 // Every daily_scrambles row this run seeds, so cleanup can delete exactly
 // those and nothing that generate-scrambles.mjs or a real user wrote.
@@ -219,8 +235,20 @@ try {
   // labelled check rather than crashing the run if the table is missing.
   await check('setup: seed a revealed attempt for A', async () => {
     await admin.from('daily_attempts').insert({
-      user_id: a.userId, event: '333', utc_day: today,
+      user_id: a.userId, event: SENTINEL_EVENT_SEED, utc_day: today,
     }).throwOnError()
+    seededAttempts.push({ user_id: a.userId, event: SENTINEL_EVENT_SEED, utc_day: today })
+  })
+
+  // A profile for A, so the "no email column" check below has an actual row to
+  // inspect. Without one, profiles came back empty and the loop body -- the
+  // only place the assertion lived -- never ran, so the check was green
+  // whatever the schema exposed.
+  await check('setup: seed a profile for A', async () => {
+    await admin.from('profiles').insert({
+      user_id: a.userId, username: `harness-${stamp}`, opted_in: false,
+    }).throwOnError()
+    seededProfiles.push(a.userId)
   })
 
   await expectEmpty(
@@ -231,40 +259,82 @@ try {
   await check('a published submitted attempt is visible to B', async () => {
     await admin.from('daily_attempts')
       .update({ submitted_at: new Date().toISOString(), time_ms: 9990, published: true })
-      .eq('user_id', a.userId).eq('event', '333').eq('utc_day', today)
+      .eq('user_id', a.userId).eq('event', SENTINEL_EVENT_SEED).eq('utc_day', today)
       .throwOnError()
     const { data, error } = await b.client
       .from('daily_attempts').select('time_ms')
-      .eq('user_id', a.userId).eq('event', '333')
+      .eq('user_id', a.userId).eq('event', SENTINEL_EVENT_SEED)
     assert(!error, `unexpected error ${error?.message}`)
     assert(data.length === 1 && data[0].time_ms === 9990, 'published attempt was not readable')
   })
 
   await expectError(
     'B cannot write an attempt at all',
-    b.client.from('daily_attempts').insert({ user_id: b.userId, event: '333', utc_day: today }),
+    b.client.from('daily_attempts').insert({ user_id: b.userId, event: SENTINEL_EVENT_SEED, utc_day: today }),
   )
 
   await expectError(
     'a user who has not opted in cannot publish a daily best',
     b.client.from('daily_bests').insert({
-      user_id: b.userId, event: '333', utc_day: today,
+      user_id: b.userId, event: SENTINEL_EVENT_SEED, utc_day: today,
       time_ms: 8000, updated_at: new Date().toISOString(), published: true,
     }),
   )
 
   await check('the same row is accepted unpublished', async () => {
     const { error } = await b.client.from('daily_bests').insert({
-      user_id: b.userId, event: '333', utc_day: today,
+      user_id: b.userId, event: SENTINEL_EVENT_SEED, utc_day: today,
       time_ms: 8000, updated_at: new Date().toISOString(), published: false,
     })
     assert(!error, `rejected an unpublished own-row write: ${error?.message}`)
+    seededBests.push({ user_id: b.userId, event: SENTINEL_EVENT_SEED, utc_day: today })
+  })
+
+  // The negative above proves a non-opted-in user cannot publish. On its own
+  // that is satisfied just as well by a broken `exists (... and p.opted_in)`
+  // subquery that denies EVERYONE -- the board would be permanently empty and
+  // this suite would still be all green. These two checks pin the gate down
+  // from both sides.
+  await check('with opted_in, a published best is accepted and visible to others', async () => {
+    await admin.from('profiles').update({ opted_in: true }).eq('user_id', a.userId).throwOnError()
+    const row = { user_id: a.userId, event: SENTINEL_EVENT_SEED, utc_day: today }
+    const { error } = await a.client.from('daily_bests').insert({
+      ...row, time_ms: 7777, updated_at: new Date().toISOString(), published: true,
+    })
+    assert(!error, `an opted-in user could not publish: ${error?.message}`)
+    seededBests.push(row)
+    const { data, error: readError } = await b.client
+      .from('daily_bests').select('time_ms')
+      .eq('user_id', a.userId).eq('event', SENTINEL_EVENT_SEED).eq('utc_day', today)
+    assert(!readError, `unexpected error ${readError?.message}`)
+    assert(data.length === 1 && data[0].time_ms === 7777, 'a published best was not visible to another user')
+  })
+
+  await check('withdrawing opted_in blocks the next published write', async () => {
+    await admin.from('profiles').update({ opted_in: false }).eq('user_id', a.userId).throwOnError()
+    const row = { user_id: a.userId, event: SENTINEL_EVENT_OPTOUT, utc_day: today }
+    const { error } = await a.client.from('daily_bests').insert({
+      ...row, time_ms: 6666, updated_at: new Date().toISOString(), published: true,
+    })
+    if (!error) seededBests.push(row)
+    assert(!!error, 'published after opting back out')
   })
 
   await check('no query path returns an email address', async () => {
-    const { data } = await b.client.from('profiles').select('*')
-    for (const row of data ?? []) {
-      assert(!('email' in row), 'profiles exposed an email column')
+    // Each source must actually return rows, or "no email in the results" is
+    // true only because there were no results -- which is how this check used
+    // to pass without ever running its assertion.
+    const sources = [
+      ['profiles', await b.client.from('profiles').select('*')],
+      ['daily_attempts', await b.client.from('daily_attempts').select('*')],
+      ['daily_bests', await b.client.from('daily_bests').select('*')],
+    ]
+    for (const [table, { data, error }] of sources) {
+      assert(!error, `${table}: unexpected error ${error?.message}`)
+      assert((data ?? []).length > 0, `${table} returned no rows, so this check would prove nothing`)
+      for (const row of data) {
+        assert(!('email' in row), `${table} exposed an email column`)
+      }
     }
   })
 
@@ -380,6 +450,33 @@ try {
   // exact (event, utc_day) this run inserted, never a broad delete, so this
   // can never remove a real scramble even if the sentinel constants above
   // were ever changed to something that collided.
+  // Rows keyed to a throwaway account cascade away with it, but the account
+  // deletion above only warns on failure -- so delete them explicitly too,
+  // each independently, rather than trusting the cascade.
+  for (const { user_id, event, utc_day } of seededAttempts) {
+    try {
+      await admin.from('daily_attempts').delete()
+        .eq('user_id', user_id).eq('event', event).eq('utc_day', utc_day).throwOnError()
+    } catch (e) {
+      console.warn(`WARNING: failed to delete fixture daily_attempts row (${event}, ${utc_day}) — ${e.message}. Remove it manually.`)
+    }
+  }
+  for (const { user_id, event, utc_day } of seededBests) {
+    try {
+      await admin.from('daily_bests').delete()
+        .eq('user_id', user_id).eq('event', event).eq('utc_day', utc_day).throwOnError()
+    } catch (e) {
+      console.warn(`WARNING: failed to delete fixture daily_bests row (${event}, ${utc_day}) — ${e.message}. Remove it manually.`)
+    }
+  }
+  for (const user_id of seededProfiles) {
+    try {
+      await admin.from('profiles').delete().eq('user_id', user_id).throwOnError()
+    } catch (e) {
+      console.warn(`WARNING: failed to delete fixture profiles row (${user_id}) — ${e.message}. Remove it manually.`)
+    }
+  }
+
   for (const { event, utc_day } of seededScrambles) {
     try {
       await admin.from('daily_scrambles').delete().eq('event', event).eq('utc_day', utc_day).throwOnError()
