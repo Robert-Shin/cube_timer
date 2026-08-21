@@ -622,6 +622,13 @@ export default function App() {
         </div>
           ) : (
             <DailyChallenge
+              // Remounted per event: reveal/result live in DailyChallenge's
+              // state, and the session dropdown stays live on this tab. Without
+              // a key, switching session mid-attempt would leave the previous
+              // event's scramble on screen with an armed timer, writing that
+              // scramble into the new session and submitting against an event
+              // that was never revealed.
+              key={session.event}
               event={session.event}
               paused={modalOpen}
               onRecord={(timeMs, scrambleUsed) => {
@@ -639,7 +646,13 @@ export default function App() {
                       penalty: 'none' as Penalty,
                       createdAt: Date.now(),
                       updatedAt: Date.now(),
-                      parity: [] as ParityId[],
+                      // [] means "measured as none", so it must not be claimed
+                      // when parity is being tracked but was never asked --
+                      // that would bias the no-parity mean. Same rule as the
+                      // ordinary record() path.
+                      ...(settings.trackParity && hasParity(session.event)
+                        ? {}
+                        : { parity: [] as ParityId[] }),
                     },
                     ...prev.solves,
                   ],
