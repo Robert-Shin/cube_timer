@@ -53,6 +53,26 @@ const admin = createClient(URL_, SERVICE, { auth: { persistSession: false } })
 // enumerates or touches anyone else's account.
 const createdUserIds = []
 
+// Sentinel event ids for daily_scrambles fixtures this run seeds directly
+// (bypassing RLS via the service-role client, the way generate-scrambles.mjs
+// never can). These must never collide with a real challenge event id --
+// '222', '333', '444', '555', '666', '777', 'minx', 'pyram', 'skewb', 'sq1',
+// 'clock' -- because reveal_daily/submit_daily are event-agnostic, so a
+// sentinel exercises them exactly as well as a real event would, without any
+// risk of a leftover fixture being mistaken for that day's real scramble by
+// generate-scrambles.mjs's ignoreDuplicates upsert. Three distinct sentinels
+// because the flow below needs three independent (event, utc_day) rows: the
+// main reveal/submit path, the "no attempt yet" rejection (which must NOT
+// already have an attempt from another check), and the concurrent-submission
+// race.
+const SENTINEL_EVENT_MAIN = '__harness_main__'
+const SENTINEL_EVENT_NO_ATTEMPT = '__harness_no_attempt__'
+const SENTINEL_EVENT_RACE = '__harness_race__'
+
+// Every daily_scrambles row this run seeds, so cleanup can delete exactly
+// those and nothing that generate-scrambles.mjs or a real user wrote.
+const seededScrambles = []
+
 const results = []
 async function check(label, fn) {
   try {
@@ -248,34 +268,37 @@ try {
     }
   })
 
-  // A scramble must exist for the day before reveal can return one.
-  await admin.from('daily_scrambles')
-    .upsert({ event: '444', utc_day: today, scramble: 'R U R2 Fw2 Uw' })
-    .throwOnError()
+  // A scramble must exist for the day before reveal can return one. Seeded
+  // under a sentinel event id -- see SENTINEL_EVENT_MAIN above -- and a
+  // plausibly-shaped but clearly-fake scramble string, so it can never be
+  // mistaken for a real daily challenge.
+  const mainFixture = { event: SENTINEL_EVENT_MAIN, utc_day: today, scramble: "R U R2 F' D2 L Uw2 __harness_fixture__" }
+  await admin.from('daily_scrambles').upsert(mainFixture).throwOnError()
+  seededScrambles.push(mainFixture)
 
   await check('reveal returns the scramble and creates the commitment', async () => {
-    const { data, error } = await b.client.rpc('reveal_daily', { p_event: '444' })
+    const { data, error } = await b.client.rpc('reveal_daily', { p_event: SENTINEL_EVENT_MAIN })
     assert(!error, `reveal failed: ${error?.message}`)
-    assert(data[0].scramble === 'R U R2 Fw2 Uw', 'wrong scramble returned')
+    assert(data[0].scramble === mainFixture.scramble, 'wrong scramble returned')
     assert(data[0].submitted === false, 'a fresh attempt claimed to be submitted')
   })
 
   await check('revealing twice is idempotent and returns the same scramble', async () => {
-    const { data, error } = await b.client.rpc('reveal_daily', { p_event: '444' })
+    const { data, error } = await b.client.rpc('reveal_daily', { p_event: SENTINEL_EVENT_MAIN })
     assert(!error, `second reveal failed: ${error?.message}`)
-    assert(data[0].scramble === 'R U R2 Fw2 Uw', 'second reveal changed the scramble')
+    assert(data[0].scramble === mainFixture.scramble, 'second reveal changed the scramble')
   })
 
   await check('submitting with no attempt is rejected', async () => {
     const { error } = await b.client.rpc('submit_daily', {
-      p_event: '555', p_time_ms: 30000, p_penalty: 'none',
+      p_event: SENTINEL_EVENT_NO_ATTEMPT, p_time_ms: 30000, p_penalty: 'none',
     })
     assert(!!error, 'submitted for an event that was never revealed')
   })
 
   await check('a time longer than the elapsed wall clock is rejected', async () => {
     const { error } = await b.client.rpc('submit_daily', {
-      p_event: '444', p_time_ms: 86_400_000, p_penalty: 'none',
+      p_event: SENTINEL_EVENT_MAIN, p_time_ms: 86_400_000, p_penalty: 'none',
     })
     assert(!!error, 'accepted a 24-hour solve seconds after reveal')
   })
@@ -290,21 +313,21 @@ try {
 
   await check('the first submission is accepted', async () => {
     const { error } = await b.client.rpc('submit_daily', {
-      p_event: '444', p_time_ms: 900, p_penalty: 'none',
+      p_event: SENTINEL_EVENT_MAIN, p_time_ms: 900, p_penalty: 'none',
     })
     assert(!error, `first submission rejected: ${error?.message}`)
   })
 
   await check('a second submission is rejected', async () => {
     const { error } = await b.client.rpc('submit_daily', {
-      p_event: '444', p_time_ms: 9999, p_penalty: 'none',
+      p_event: SENTINEL_EVENT_MAIN, p_time_ms: 9999, p_penalty: 'none',
     })
     assert(!!error, 'a result was overwritten — it must be immutable')
   })
 
   await check('a result from a user who has not opted in stays unpublished', async () => {
     const { data } = await admin.from('daily_attempts').select('published')
-      .eq('user_id', b.userId).eq('event', '444').eq('utc_day', today)
+      .eq('user_id', b.userId).eq('event', SENTINEL_EVENT_MAIN).eq('utc_day', today)
     assert(data[0].published === false, 'published without opting in')
   })
 
@@ -315,10 +338,10 @@ try {
   // `... where submitted_at is null` guard: two calls in flight at once,
   // racing against the same row, must leave exactly one winner.
   await check('two concurrent submissions: exactly one wins', async () => {
-    const event = '666'
-    await admin.from('daily_scrambles')
-      .upsert({ event, utc_day: today, scramble: 'R2 U2 F2' })
-      .throwOnError()
+    const event = SENTINEL_EVENT_RACE
+    const raceFixture = { event, utc_day: today, scramble: "R2 U' F2 D L2 B' __harness_fixture__" }
+    await admin.from('daily_scrambles').upsert(raceFixture).throwOnError()
+    seededScrambles.push(raceFixture)
 
     const { error: revealError } = await b.client.rpc('reveal_daily', { p_event: event })
     assert(!revealError, `reveal before race failed: ${revealError?.message}`)
@@ -347,6 +370,21 @@ try {
       await admin.auth.admin.deleteUser(userId)
     } catch (e) {
       console.warn(`WARNING: failed to delete throwaway account ${userId} — ${e.message}. Remove it manually.`)
+    }
+  }
+
+  // daily_scrambles rows aren't owned by a user, so deleting the throwaway
+  // accounts above doesn't cascade to them -- they must be cleaned up
+  // explicitly, or a sentinel fixture would linger and (harmlessly, since it
+  // can never match a real event id) accumulate across runs. Filtered on the
+  // exact (event, utc_day) this run inserted, never a broad delete, so this
+  // can never remove a real scramble even if the sentinel constants above
+  // were ever changed to something that collided.
+  for (const { event, utc_day } of seededScrambles) {
+    try {
+      await admin.from('daily_scrambles').delete().eq('event', event).eq('utc_day', utc_day).throwOnError()
+    } catch (e) {
+      console.warn(`WARNING: failed to delete fixture daily_scrambles row (${event}, ${utc_day}) — ${e.message}. Remove it manually.`)
     }
   }
 }
