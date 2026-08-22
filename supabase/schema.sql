@@ -368,3 +368,79 @@ revoke all on function public.reveal_daily(text) from public;
 revoke all on function public.submit_daily(text, integer, text) from public;
 grant execute on function public.reveal_daily(text) to authenticated;
 grant execute on function public.submit_daily(text, integer, text) to authenticated;
+
+-- ------------------------------------------------------------- friendships
+-- Phase 3. Keyed on profiles(user_id), NOT auth.users(id): phase 1 moved
+-- profile creation to username-claim time, so this foreign key makes it
+-- structurally impossible to befriend someone who has not claimed a name,
+-- with no check in application code.
+create table if not exists public.friendships (
+  requester   uuid not null references public.profiles(user_id) on delete cascade,
+  addressee   uuid not null references public.profiles(user_id) on delete cascade,
+  state       text not null check (state in ('pending', 'accepted')),
+  created_at  timestamptz not null default now(),
+  primary key (requester, addressee),
+  check (requester <> addressee)
+);
+
+-- One row per UNORDERED pair, so rob->glen and glen->rob cannot both exist
+-- as competing requests. The primary key alone does not give this: it treats
+-- the two directions as different rows.
+create unique index if not exists friendships_pair on public.friendships
+  (least(requester, addressee), greatest(requester, addressee));
+
+-- The practice calendar groups by created_at. The existing solve indexes are
+-- (user_id, updated_at) for sync pulls and (user_id, session_id) for stats;
+-- neither serves a date-range scan.
+create index if not exists solves_user_created
+  on public.solves (user_id, created_at) where not deleted;
+
+-- "Are these two friends" is an OR over both column orders. Written exactly
+-- once so the boundary condition can be attacked once rather than being
+-- copy-pasted into each reader and drifting.
+--
+-- security definer deliberately: under the caller's own RLS this could only
+-- ever see friendships the caller is party to, which happens to be sufficient
+-- for today's callers but only by coincidence -- and relying on that
+-- coincidence would make the helper unsafe the moment it is reused.
+create or replace function public.are_friends(a uuid, b uuid)
+returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from public.friendships f
+    where f.state = 'accepted'
+      and ((f.requester = a and f.addressee = b)
+        or (f.requester = b and f.addressee = a))
+  );
+$$;
+
+alter table public.friendships enable row level security;
+
+-- You see only friendships you are part of.
+drop policy if exists friend_select on public.friendships;
+create policy friend_select on public.friendships for select
+  using (auth.uid() in (requester, addressee));
+
+-- You may only ever create a PENDING request, and only as yourself.
+--
+-- `state = 'pending'` is THE load-bearing clause of this feature. Without it
+-- anyone could insert (me, victim, 'accepted') and read a stranger's entire
+-- practice history without that person ever being asked.
+drop policy if exists friend_insert on public.friendships;
+create policy friend_insert on public.friendships for insert
+  with check (auth.uid() = requester and state = 'pending');
+
+-- Only the addressee may accept, and only pending -> accepted. `using` tests
+-- the row as it was, `with check` the row as it would become: together they
+-- stop a requester self-accepting, and stop an accepted row being flipped
+-- back to pending and re-accepted to launder it.
+drop policy if exists friend_accept on public.friendships;
+create policy friend_accept on public.friendships for update
+  using      (auth.uid() = addressee and state = 'pending')
+  with check (auth.uid() = addressee and state = 'accepted');
+
+-- Either party may walk away, from either state. Declining a request and
+-- unfriending are deliberately the same operation: one path out, not two.
+drop policy if exists friend_delete on public.friendships;
+create policy friend_delete on public.friendships for delete
+  using (auth.uid() in (requester, addressee));
