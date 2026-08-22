@@ -414,6 +414,15 @@ language sql stable security definer set search_path = public as $$
   );
 $$;
 
+-- No grant to authenticated (or anyone) follows, and none should be added.
+-- This is an internal helper reached only from inside friend_calendar and
+-- friend_stats, which run security definer as the function owner -- they
+-- don't need an execute grant on are_friends to call it. A client able to
+-- call it directly could pass two arbitrary uuids it has no relationship
+-- to and learn whether those two strangers are friends, which is not
+-- something any client needs to do.
+revoke all on function public.are_friends(uuid, uuid) from public;
+
 alter table public.friendships enable row level security;
 
 -- You see only friendships you are part of.
@@ -511,3 +520,8 @@ language sql stable security definer set search_path = public as $$
     (select arr from recent)
   where public.are_friends(auth.uid(), p_user);
 $$;
+
+revoke all on function public.friend_calendar(uuid, text, date) from public;
+revoke all on function public.friend_stats(uuid, text) from public;
+grant execute on function public.friend_calendar(uuid, text, date) to authenticated;
+grant execute on function public.friend_stats(uuid, text) to authenticated;
