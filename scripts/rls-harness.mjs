@@ -132,11 +132,16 @@ async function asUser(email) {
  * which case this reuses it instead of colliding with profiles_pkey.
  */
 async function claimProfile(u) {
-  const { data: existing } = await admin
+  const { data: existing, error: selectError } = await admin
     .from('profiles')
     .select('username')
     .eq('user_id', u.userId)
     .maybeSingle()
+  // maybeSingle() returns no error for "zero rows" -- any error here is a
+  // genuine failure (permissions, connectivity, etc.), not "not claimed
+  // yet", and must not be swallowed by silently falling through to the
+  // insert path below.
+  if (selectError) throw selectError
   if (existing) return existing.username
   const username = `h${String(u.userId).replace(/-/g, '').slice(0, 12)}`
   const { error } = await u.client
@@ -641,6 +646,23 @@ try {
   // The addressee accepts. This is the only legal transition.
   await expectOneRow(
     'friendships: addressee can accept a pending request',
+    b.client.from('friendships')
+      .update({ state: 'accepted' })
+      .eq('requester', a.userId).eq('addressee', b.userId)
+      .select(),
+  )
+
+  // Isolates the `state = 'pending'` half of the update policy's USING
+  // clause, independent of every other clause. B is the addressee (so
+  // `auth.uid() = addressee` passes) and the target state is 'accepted' (so
+  // WITH CHECK passes) -- the row is already accepted, so USING's
+  // `state = 'pending'` is the only clause that can still reject this, and
+  // it matches no row. Paired with "addressee can accept a pending request"
+  // above (same actor, same pair, same target state, differing only in the
+  // row's CURRENT state), this is the differential proof that a live
+  // weaken-and-restore of the policy would otherwise have provided.
+  await expectEmpty(
+    'friendships: the addressee cannot re-accept an already-accepted friendship',
     b.client.from('friendships')
       .update({ state: 'accepted' })
       .eq('requester', a.userId).eq('addressee', b.userId)
