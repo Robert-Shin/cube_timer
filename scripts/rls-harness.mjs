@@ -121,6 +121,32 @@ async function asUser(email) {
   return { client, userId: data.user.id, email }
 }
 
+/**
+ * Claims a username for a throwaway account. friendships references
+ * profiles(user_id), so without this every insert below fails on the foreign
+ * key rather than on the policy under test -- which would make these
+ * assertions pass for entirely the wrong reason.
+ *
+ * Idempotent: earlier assertions in this same run may already have seeded a
+ * profile for this account (A gets one at "setup: seed a profile for A"), in
+ * which case this reuses it instead of colliding with profiles_pkey.
+ */
+async function claimProfile(u) {
+  const { data: existing } = await admin
+    .from('profiles')
+    .select('username')
+    .eq('user_id', u.userId)
+    .maybeSingle()
+  if (existing) return existing.username
+  const username = `h${String(u.userId).replace(/-/g, '').slice(0, 12)}`
+  const { error } = await u.client
+    .from('profiles')
+    .insert({ user_id: u.userId, username })
+  if (error) throw error
+  seededProfiles.push(u.userId)
+  return username
+}
+
 async function expectEmpty(label, query) {
   await check(label, async () => {
     const { data, error } = await query
@@ -549,6 +575,119 @@ try {
     assert(succeeded.length === 1, `expected exactly 1 winner, got ${succeeded.length}`)
     assert(failed.length === 1, `expected exactly 1 rejection, got ${failed.length}`)
   })
+
+  // ---------------------------------------------------------- friendships
+  const c = await asUser(`rls-c-${stamp}@example.test`)
+  await claimProfile(a)
+  await claimProfile(b)
+  await claimProfile(c)
+
+  // THE most important assertion in this feature. Without `state = 'pending'`
+  // on the insert policy, this succeeds and a stranger reads a full practice
+  // history without the victim ever being asked.
+  //
+  // This does the work of expectError, but also captures the real error
+  // object and confirms it is a row-level-security rejection (42501, or a
+  // message mentioning row-level security/policy) rather than a foreign-key
+  // violation (23503) or a unique violation (23505). Without this check the
+  // assertion could pass vacuously -- rejected for the wrong reason -- and
+  // still read green.
+  await check('friendships: cannot insert a pre-accepted friendship', async () => {
+    const { error } = await a.client.from('friendships')
+      .insert({ requester: a.userId, addressee: b.userId, state: 'accepted' })
+    assert(!!error, 'expected the write to be rejected, but it succeeded')
+    const isRlsRejection =
+      error.code === '42501' ||
+      /row-level security|policy/i.test(error.message ?? '')
+    assert(
+      isRlsRejection,
+      `expected a row-level-security rejection (42501), got ${error.code}: ${error.message} -- this assertion would be testing the wrong thing`,
+    )
+    console.log(`    (verbatim error for "cannot insert a pre-accepted friendship": ${JSON.stringify(error)})`)
+  })
+
+  // You cannot forge a request FROM someone else.
+  await expectError(
+    'friendships: cannot insert a request as another user',
+    a.client.from('friendships')
+      .insert({ requester: b.userId, addressee: c.userId, state: 'pending' }),
+  )
+
+  // The legitimate path: a pending request from a to b.
+  await expectOneRow(
+    'friendships: can send a pending request as yourself',
+    a.client.from('friendships')
+      .insert({ requester: a.userId, addressee: b.userId, state: 'pending' })
+      .select(),
+  )
+
+  // The requester cannot accept their own request -- the update policy's
+  // `using` clause requires auth.uid() = addressee.
+  await expectEmpty(
+    'friendships: requester cannot self-accept',
+    a.client.from('friendships')
+      .update({ state: 'accepted' })
+      .eq('requester', a.userId).eq('addressee', b.userId)
+      .select(),
+  )
+
+  // A third party sees nothing of a friendship between two other users.
+  await expectEmpty(
+    'friendships: a third party cannot see a friendship between others',
+    c.client.from('friendships').select('*')
+      .eq('requester', a.userId).eq('addressee', b.userId),
+  )
+
+  // The addressee accepts. This is the only legal transition.
+  await expectOneRow(
+    'friendships: addressee can accept a pending request',
+    b.client.from('friendships')
+      .update({ state: 'accepted' })
+      .eq('requester', a.userId).eq('addressee', b.userId)
+      .select(),
+  )
+
+  // An accepted row cannot be flipped back to pending -- otherwise it could
+  // be laundered through a second accept to reset provenance.
+  await expectEmpty(
+    'friendships: an accepted friendship cannot be reverted to pending',
+    b.client.from('friendships')
+      .update({ state: 'pending' })
+      .eq('requester', a.userId).eq('addressee', b.userId)
+      .select(),
+  )
+
+  // One row per unordered pair: the reverse-direction request is refused by
+  // the friendships_pair unique index.
+  await expectError(
+    'friendships: the reverse-direction duplicate is rejected',
+    b.client.from('friendships')
+      .insert({ requester: b.userId, addressee: a.userId, state: 'pending' }),
+  )
+
+  // select('*') is unrestricted by column here -- unlike profiles, where a
+  // column-level grant deliberately makes select('*') FAIL so a column added
+  // later is not public by default. friendships needs no such grant because
+  // every column is meaningful to both parties and to nobody else, and the
+  // row filter is the whole boundary. This assertion pins that reasoning:
+  // '*' must succeed AND return only rows the caller is party to. If someone
+  // later adds a column that should not be shared, this is the assertion
+  // that should be made to fail, by adding a grant -- not deleted.
+  await check('friendships: select(*) returns only rows the caller is part of', async () => {
+    const { data, error } = await c.client.from('friendships').select('*')
+    assert(!error, `unexpected error ${error?.message}`)
+    for (const row of data ?? []) {
+      assert(
+        row.requester === c.userId || row.addressee === c.userId,
+        `leaked a friendship between ${row.requester} and ${row.addressee}`,
+      )
+    }
+  })
+
+  // friendships rows need no explicit cleanup: both columns reference
+  // profiles(user_id) -> auth.users(id) on delete cascade, so deleting the
+  // throwaway accounts removes them. seededProfiles is cleaned for the same
+  // reason and is kept only for the case where account deletion itself fails.
 } finally {
   // Removing the users cascades to their rows. Runs even on a thrown setup
   // or assertion error, so a failed run never orphans accounts. Each
