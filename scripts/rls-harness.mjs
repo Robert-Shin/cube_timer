@@ -168,6 +168,29 @@ async function expectError(label, query) {
   })
 }
 
+// Like expectError, but for assertions whose entire point is that RLS itself
+// did the rejecting -- not a table constraint that happens to fire on the
+// same write. `expectError` only checks truthiness, so it cannot tell "the
+// policy rejected this" from "a unique or foreign-key violation rejected
+// this for an unrelated reason" -- exactly the trap that made the original
+// E assertion (redirecting a pending request's addressee) pass whether or
+// not the addressee clause existed, because the proposed row collided with
+// an existing primary key either way. Use this wherever an RLS rejection is
+// the thing under test.
+async function expectRlsError(label, query) {
+  await check(label, async () => {
+    const { error } = await query
+    assert(!!error, 'expected the write to be rejected, but it succeeded')
+    const isRlsRejection =
+      error.code === '42501' ||
+      /row-level security|policy/i.test(error.message ?? '')
+    assert(
+      isRlsRejection,
+      `expected a row-level-security rejection (42501), got ${error.code}: ${error.message} -- this assertion would be testing the wrong thing`,
+    )
+  })
+}
+
 async function expectOneRow(label, query) {
   await check(label, async () => {
     const { data, error } = await query
@@ -583,9 +606,19 @@ try {
 
   // ---------------------------------------------------------- friendships
   const c = await asUser(`rls-c-${stamp}@example.test`)
+  // A fourth account, used only to isolate E (friend_accept's WITH CHECK
+  // `auth.uid() = addressee`) below. Redirecting to b.userId collided with
+  // the primary key (requester, addressee) of the row assertion 6 already
+  // created -- (A, B) -- so an error came back whether or not E existed,
+  // and expectError couldn't tell those two cases apart. D has no existing
+  // friendship with A in either direction, so the proposed (A, D) row exists
+  // nowhere: if E were deleted, the update would actually SUCCEED, giving
+  // expectRlsError something real to fail against.
+  const d = await asUser(`rls-d-${stamp}@example.test`)
   await claimProfile(a)
   await claimProfile(b)
   await claimProfile(c)
+  await claimProfile(d)
 
   // THE most important assertion in this feature. Without `state = 'pending'`
   // on the insert policy, this succeeds and a stranger reads a full practice
@@ -611,8 +644,14 @@ try {
     console.log(`    (verbatim error for "cannot insert a pre-accepted friendship": ${JSON.stringify(error)})`)
   })
 
-  // You cannot forge a request FROM someone else.
-  await expectError(
+  // You cannot forge a request FROM someone else. expectRlsError, not
+  // expectError: the point under test is specifically the insert policy's
+  // `auth.uid() = requester` conjunct. If it were deleted, `state = 'pending'`
+  // still passes and no (b, c) row exists yet to collide with, so the insert
+  // would actually SUCCEED -- expectRlsError (and even plain expectError)
+  // would correctly go red in that case, since no other constraint stands in
+  // to reject it for the wrong reason.
+  await expectRlsError(
     'friendships: cannot insert a request as another user',
     a.client.from('friendships')
       .insert({ requester: b.userId, addressee: c.userId, state: 'pending' }),
@@ -684,7 +723,11 @@ try {
   )
 
   // One row per unordered pair: the reverse-direction request is refused by
-  // the friendships_pair unique index.
+  // the friendships_pair unique index. Plain expectError deliberately, not
+  // expectRlsError: this row would pass every RLS clause (b is inserting as
+  // itself, state is 'pending'), so a genuine 23505 unique-violation IS the
+  // expected outcome here -- it's a table constraint under test, not a
+  // policy.
   await expectError(
     'friendships: the reverse-direction duplicate is rejected',
     b.client.from('friendships')
@@ -732,19 +775,32 @@ try {
   // Isolates E. USING passes: C is the row's CURRENT addressee and the row
   // is pending. WITH CHECK's `state = 'accepted'` (F) also passes -- the
   // target state IS 'accepted'. Only E can still reject this: the row AS IT
-  // WOULD BECOME has addressee = b.userId, not C, so `auth.uid() = addressee`
+  // WOULD BECOME has addressee = d.userId, not C, so `auth.uid() = addressee`
   // fails against the new row. Without E, C could redirect a request A sent
-  // to C onto b -- someone A never asked and who never consented.
+  // to C onto d -- someone A never asked and who never consented.
   //
-  // expectError, not expectEmpty: a row that satisfies USING but whose new
-  // values fail WITH CHECK is not silently filtered the way a USING failure
-  // is -- Postgres raises an explicit "new row violates row-level security
-  // policy" error (42501) instead, and the write never lands, confirmed by
-  // the isolation of F immediately below still seeing the row pending.
-  await expectError(
+  // Redirects to d.userId, not b.userId: A already has an ACCEPTED (A, B)
+  // row by this point (assertion 6), so redirecting here to B would propose
+  // a row with the same primary key (requester, addressee) as that existing
+  // row. Counterfactual with E deleted: WITH CHECK would reduce to F alone,
+  // which passes, so Postgres would proceed to the heap write and hit the
+  // (A, B) primary-key conflict -- 23505, not the row succeeding -- so
+  // *any* expectError-shaped check would report "ok" whether E existed or
+  // not; that was the bug in round 1's version of this assertion. D has no
+  // friendship with A in either direction, so (A, d.userId) exists nowhere:
+  // with E deleted, this update would actually SUCCEED (no error at all),
+  // which is what makes the assertion capable of going red.
+  //
+  // expectRlsError, not plain expectError: with E present, a row that
+  // satisfies USING but whose new values fail WITH CHECK is not silently
+  // filtered the way a USING failure is -- Postgres raises an explicit
+  // "new row violates row-level security policy" error (42501) instead of
+  // returning zero rows -- and this confirms the rejection actually IS that
+  // policy error, not some other error that happened to also be non-null.
+  await expectRlsError(
     'friendships: the addressee cannot redirect a pending request to someone else',
     c.client.from('friendships')
-      .update({ addressee: b.userId, state: 'accepted' })
+      .update({ addressee: d.userId, state: 'accepted' })
       .eq('requester', a.userId).eq('addressee', c.userId)
       .select(),
   )
@@ -753,10 +809,14 @@ try {
   // -- it errored, so the row was never touched), leaving the A -> C row
   // still pending, addressee still C. USING passes for the same reason as
   // above, and `auth.uid() = addressee` in WITH CHECK also passes --
-  // addressee is unchanged. Only F can still reject this: the target state
-  // is 'pending', not 'accepted'. Same WITH CHECK failure mode as E above,
-  // so expectError again rather than expectEmpty.
-  await expectError(
+  // addressee is unchanged, so no primary-key collision is possible here
+  // regardless of F's presence. Only F can still reject this: the target
+  // state is 'pending', not 'accepted'. Counterfactual with F deleted: WITH
+  // CHECK reduces to E alone, which passes (addressee is unchanged), USING
+  // already passed, so the update would SUCCEED with no error -- a real red
+  // signal, not a same-PK collision. expectRlsError again, for the same
+  // "confirm it's actually 42501" reason as E above.
+  await expectRlsError(
     'friendships: accepting requires actually moving the state to accepted',
     c.client.from('friendships')
       .update({ state: 'pending' })
