@@ -444,3 +444,70 @@ create policy friend_accept on public.friendships for update
 drop policy if exists friend_delete on public.friendships;
 create policy friend_delete on public.friendships for delete
   using (auth.uid() in (requester, addressee));
+
+-- Reading another user's solves is the one thing RLS cannot express, so it is
+-- the only place security definer appears. RLS DOES NOT APPLY inside these
+-- functions: the are_friends check IS the boundary, in full. Same posture as
+-- reveal_daily. Both return NO ROWS when the caller is not an accepted
+-- friend.
+
+create or replace function public.friend_calendar(
+  p_user uuid, p_event text, p_since date)
+returns table (day date, solves int, day_best int)
+language sql stable security definer set search_path = public as $$
+  select
+    (s.created_at at time zone 'UTC')::date as day,
+    count(*)::int as solves,
+    min(case when s.penalty = 'dnf' then null
+             when s.penalty = 'plus2' then s.time_ms + 2000
+             else s.time_ms end)::int as day_best
+  from public.solves s
+  join public.sessions n on n.id = s.session_id
+  where s.user_id = p_user
+    and n.event = p_event
+    and not s.deleted
+    and not n.deleted
+    and (s.created_at at time zone 'UTC')::date >= p_since
+    and public.are_friends(auth.uid(), p_user)
+  group by 1
+  order by 1;
+$$;
+
+create or replace function public.friend_stats(p_user uuid, p_event text)
+returns table (total int, best_ms int, recent_ms int[])
+language sql stable security definer set search_path = public as $$
+  with mine as (
+    select s.created_at,
+           case when s.penalty = 'dnf' then null
+                when s.penalty = 'plus2' then s.time_ms + 2000
+                else s.time_ms end as eff
+    from public.solves s
+    join public.sessions n on n.id = s.session_id
+    where s.user_id = p_user
+      and n.event = p_event
+      and not s.deleted
+      and not n.deleted
+      and public.are_friends(auth.uid(), p_user)
+  ),
+  recent as (
+    -- Newest first, matching the order stats.ts expects: averageOf reads
+    -- solves.slice(0, n) as the most recent n. -1 encodes a DNF, because an
+    -- int[] cannot carry null through PostgREST reliably; the client maps it
+    -- back before calling averageOf.
+    select array_agg(coalesce(eff, -1) order by created_at desc) as arr
+    from (select created_at, eff from mine order by created_at desc limit 12) t
+  )
+  -- The outer WHERE looks redundant with the are_friends check already
+  -- baked into `mine` -- it is not. A scalar select list with no FROM
+  -- clause always returns exactly one row, even when `mine` is empty: a
+  -- non-friend caller would otherwise get back one row of (0, null, null)
+  -- instead of the zero rows the design spec (and a later task's
+  -- assertion) requires. This WHERE is what actually makes that true;
+  -- `mine`'s filter alone is not enough because it only empties the
+  -- aggregates, it doesn't remove the row.
+  select
+    (select count(*)::int from mine),
+    (select min(eff)::int from mine),
+    (select arr from recent)
+  where public.are_friends(auth.uid(), p_user);
+$$;

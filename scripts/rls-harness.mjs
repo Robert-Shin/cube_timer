@@ -238,6 +238,11 @@ for (const table of REQUIRED_TABLES) {
 const REQUIRED_FUNCTIONS = [
   { name: 'reveal_daily', args: { p_event: '__preflight_probe__' } },
   { name: 'submit_daily', args: { p_event: '__preflight_probe__', p_time_ms: 0, p_penalty: 'none' } },
+  // Probed with a random uuid: are_friends is false for it, so both return
+  // no rows without touching anyone's data. Only PGRST202 (function missing)
+  // fails the preflight.
+  { name: 'friend_calendar', args: { p_user: '00000000-0000-0000-0000-000000000000', p_event: '__preflight_probe__', p_since: '2000-01-01' } },
+  { name: 'friend_stats', args: { p_user: '00000000-0000-0000-0000-000000000000', p_event: '__preflight_probe__' } },
 ]
 for (const { name, args } of REQUIRED_FUNCTIONS) {
   const { error } = await admin.rpc(name, args)
