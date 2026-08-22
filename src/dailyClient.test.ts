@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { classifySubmitError } from './dailyClient'
+import { classifySubmitError, planBestOfDay } from './dailyClient'
+import type { Solve } from './types'
 
 describe('classifySubmitError', () => {
   it('treats no error as accepted', () => {
@@ -35,5 +36,44 @@ describe('classifySubmitError', () => {
     expect(classifySubmitError({ message: 'Failed to fetch' })).toBe('retry')
     expect(classifySubmitError({ code: '', message: 'TypeError' })).toBe('retry')
     expect(classifySubmitError({ code: 'XX999', message: 'internal error' })).toBe('retry')
+  })
+})
+
+describe('planBestOfDay', () => {
+  const day = '2026-08-22'
+  const solve = (over: Partial<Solve>): Solve =>
+    ({
+      id: crypto.randomUUID(),
+      sessionId: 's',
+      timeMs: 10_000,
+      penalty: 'none',
+      scramble: '',
+      createdAt: Date.parse(`${day}T12:00:00Z`),
+      updatedAt: Date.parse(`${day}T12:00:00Z`),
+      ...over,
+    }) as Solve
+
+  it('publishes the fastest ordinary solve of the day', () => {
+    const plan = planBestOfDay([solve({ timeMs: 12_000 }), solve({ timeMs: 9_500 })], day, {
+      canRetract: true,
+    })
+    expect(plan).toEqual({ action: 'publish', timeMs: 9_500 })
+  })
+
+  it('retracts when the store is complete and the day is genuinely empty', () => {
+    expect(planBestOfDay([], day, { canRetract: true })).toEqual({ action: 'retract' })
+  })
+
+  it('does nothing when there is no best and the store may not be populated', () => {
+    // The new-device wipe: an empty local store is indistinguishable from "no
+    // solves today", and retracting on that guess deletes a real published row.
+    expect(planBestOfDay([], day, { canRetract: false })).toEqual({ action: 'none' })
+  })
+
+  it('still publishes from an incomplete store -- only retraction is destructive', () => {
+    expect(planBestOfDay([solve({ timeMs: 8_000 })], day, { canRetract: false })).toEqual({
+      action: 'publish',
+      timeMs: 8_000,
+    })
   })
 })

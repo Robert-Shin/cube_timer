@@ -120,6 +120,13 @@ export function useSync(store: Store, applyRemote: (next: Store) => void) {
           merged.activeId = live[0].id
         }
         applyRef.current(merged)
+        // Keep the mirror in step with the state we just set. `applyRemote` is
+        // a React setState, so `storeRef.current` would otherwise stay on the
+        // PRE-PULL store until the next render -- and everything below this
+        // point reads the ref. Publishing from that stale snapshot is what
+        // wiped the board row on a new device: the seeded local store has a
+        // 333 session and no solves, which reads as "no best today".
+        storeRef.current = merged
       }
 
       const pulledAt = Math.max(
@@ -155,6 +162,11 @@ export function useSync(store: Store, applyRemote: (next: Store) => void) {
               (s) => storeRef.current.sessions.find((x) => x.id === s.sessionId)?.event === event,
             ),
             event,
+            // The push and the pull above both succeeded (either would have
+            // thrown), so this store is the complete picture of today and a
+            // missing best really means there is none. That assertion is what
+            // licenses retraction -- see planBestOfDay.
+            { canRetract: true },
           )
         }
         await flushQueue()

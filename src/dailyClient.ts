@@ -127,26 +127,72 @@ export async function recordChallengeResult(
 }
 
 /**
+ * 'publish' — there is a best today; write it.
+ * 'retract' — there is genuinely no best today; take the row off the board.
+ * 'none'    — we cannot tell, so touch nothing.
+ */
+export type BestPlan =
+  | { action: 'publish'; timeMs: number }
+  | { action: 'retract' }
+  | { action: 'none' }
+
+/**
+ * Decides what today's `daily_bests` row should become.
+ *
+ * `canRetract` is the caller asserting that `solves` is the device's COMPLETE
+ * picture of today. Without it, "no best" is ambiguous: a store that has not
+ * been populated from the server yet looks exactly like a day with no solves,
+ * and acting on that guess is what wiped a published row off the board when
+ * you signed in on a new device. Publishing is safe from a partial store --
+ * a best that exists is a fact -- so only retraction is gated.
+ */
+export function planBestOfDay(
+  solves: Solve[],
+  day: string,
+  { canRetract }: { canRetract: boolean },
+): BestPlan {
+  const best = bestOfDay(solves, day)
+  if (best) return { action: 'publish', timeMs: Math.round(best.ms) }
+  return canRetract ? { action: 'retract' } : { action: 'none' }
+}
+
+/**
  * Publishes the best ordinary solve of today. Derived from local state every
  * time, so deleting or DNF-ing the underlying solve corrects the row on the
  * next call with no separate retraction path.
+ *
+ * `canRetract` must only be true when `solves` is known to be complete for
+ * today -- see planBestOfDay. It defaults to false so that a new call site
+ * cannot silently acquire the destructive behaviour.
  */
-export async function publishBestOfDay(solves: Solve[], event: EventId): Promise<void> {
+export async function publishBestOfDay(
+  solves: Solve[],
+  event: EventId,
+  { canRetract = false }: { canRetract?: boolean } = {},
+): Promise<void> {
   if (!supabase) return
+  const day = utcDay(Date.now())
+  const plan = planBestOfDay(solves, day, { canRetract })
+  if (plan.action === 'none') return
+
   const { data: auth } = await supabase.auth.getUser()
   const userId = auth.user?.id
   if (!userId) return
 
-  const day = utcDay(Date.now())
-  const best = bestOfDay(solves, day)
-  const { data: profile } = await supabase
-    .from('profiles').select('opted_in').eq('user_id', userId).maybeSingle()
-
-  if (!best) {
+  if (plan.action === 'retract') {
+    // Unpublished rather than deleted. The board selects on `published`, so
+    // this takes the row off it just as a delete did, but it is reversible,
+    // it leaves the previous time in place for the owner to see, and it keeps
+    // the hard delete out of a codebase whose stated rule is soft deletes.
+    // An update matching no row is a harmless no-op.
     await supabase.from('daily_bests')
-      .delete().eq('user_id', userId).eq('event', event).eq('utc_day', day)
+      .update({ published: false, updated_at: new Date().toISOString() })
+      .eq('user_id', userId).eq('event', event).eq('utc_day', day)
     return
   }
+
+  const { data: profile } = await supabase
+    .from('profiles').select('opted_in').eq('user_id', userId).maybeSingle()
 
   // daily_bests has no `scramble` column: it used to leak the day's shared
   // scramble to any anon-key holder (a challenge result is stored locally as
@@ -159,7 +205,7 @@ export async function publishBestOfDay(solves: Solve[], event: EventId): Promise
     user_id: userId,
     event,
     utc_day: day,
-    time_ms: Math.round(best.ms),
+    time_ms: plan.timeMs,
     updated_at: new Date().toISOString(),
     published: profile?.opted_in ?? false,
   })
