@@ -626,8 +626,12 @@ try {
       .select(),
   )
 
-  // The requester cannot accept their own request -- the update policy's
-  // `using` clause requires auth.uid() = addressee.
+  // The requester cannot accept their own request. This is rejected by
+  // `auth.uid() = addressee` -- but that predicate appears in BOTH the
+  // update policy's `using` clause and its `with check` clause, and this
+  // write fails it under either evaluation (A is neither the row's current
+  // addressee nor would be its new one), so this assertion proves "using OR
+  // with check reject it", not the `using` clause specifically.
   await expectEmpty(
     'friendships: requester cannot self-accept',
     a.client.from('friendships')
@@ -705,6 +709,60 @@ try {
       )
     }
   })
+
+  // friend_accept's WITH CHECK has two conjuncts: `auth.uid() = addressee`
+  // (E) and `state = 'accepted'` (F). Nothing above exercises either: no
+  // assertion changes `addressee`, and "an accepted friendship cannot be
+  // reverted to pending" is already rejected by USING (the row's CURRENT
+  // state is 'accepted' by that point) before WITH CHECK is ever reached, so
+  // it cannot isolate F either. Isolating E and F needs a row whose CURRENT
+  // state is 'pending' (so USING passes) -- but the A<->B row is 'accepted'
+  // by this point in the sequence, and reusing it would mean reordering
+  // assertions whose state sequence is already traced as coherent. So this
+  // seeds a second, independent pending request (A -> C) purely to isolate
+  // these two clauses; it never touches the A<->B row or its assertions.
+  // Plain setup, not an assertion: matches the unasserted style used above
+  // for "A owns one session and one solve" (.throwOnError(), no check()/
+  // results entry) rather than the "setup: seed a ..." style, which IS
+  // counted -- this keeps the new-assertion count at exactly 2 (E, F), not 3.
+  await a.client.from('friendships')
+    .insert({ requester: a.userId, addressee: c.userId, state: 'pending' })
+    .throwOnError()
+
+  // Isolates E. USING passes: C is the row's CURRENT addressee and the row
+  // is pending. WITH CHECK's `state = 'accepted'` (F) also passes -- the
+  // target state IS 'accepted'. Only E can still reject this: the row AS IT
+  // WOULD BECOME has addressee = b.userId, not C, so `auth.uid() = addressee`
+  // fails against the new row. Without E, C could redirect a request A sent
+  // to C onto b -- someone A never asked and who never consented.
+  //
+  // expectError, not expectEmpty: a row that satisfies USING but whose new
+  // values fail WITH CHECK is not silently filtered the way a USING failure
+  // is -- Postgres raises an explicit "new row violates row-level security
+  // policy" error (42501) instead, and the write never lands, confirmed by
+  // the isolation of F immediately below still seeing the row pending.
+  await expectError(
+    'friendships: the addressee cannot redirect a pending request to someone else',
+    c.client.from('friendships')
+      .update({ addressee: b.userId, state: 'accepted' })
+      .eq('requester', a.userId).eq('addressee', c.userId)
+      .select(),
+  )
+
+  // Isolates F. The redirect attempt above was rejected (not merely filtered
+  // -- it errored, so the row was never touched), leaving the A -> C row
+  // still pending, addressee still C. USING passes for the same reason as
+  // above, and `auth.uid() = addressee` in WITH CHECK also passes --
+  // addressee is unchanged. Only F can still reject this: the target state
+  // is 'pending', not 'accepted'. Same WITH CHECK failure mode as E above,
+  // so expectError again rather than expectEmpty.
+  await expectError(
+    'friendships: accepting requires actually moving the state to accepted',
+    c.client.from('friendships')
+      .update({ state: 'pending' })
+      .eq('requester', a.userId).eq('addressee', c.userId)
+      .select(),
+  )
 
   // friendships rows need no explicit cleanup: both columns reference
   // profiles(user_id) -> auth.users(id) on delete cascade, so deleting the
