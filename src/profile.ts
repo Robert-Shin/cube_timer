@@ -3,7 +3,7 @@
  * it. Kept apart from dailyClient.ts, which owns the daily tables.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from './supabase'
 
 /** Mirrors the `profiles_username_format` check constraint in schema.sql. */
@@ -55,8 +55,13 @@ export interface Profile {
  */
 export async function fetchProfile(): Promise<Profile | null> {
   if (!supabase) return null
-  const { data: auth } = await supabase.auth.getUser()
-  const userId = auth.user?.id
+  // getSession, not getUser, and for the same reason sync/engine.ts uses it:
+  // getSession reads the cached session locally, while getUser is a network
+  // round trip that on a fetch failure resolves to a null user instead of
+  // throwing. Offline that would look identical to "signed in with no name
+  // yet" -- and that state opens a gate whose only exit is Sign out.
+  const { data: auth } = await supabase.auth.getSession()
+  const userId = auth.session?.user.id
   if (!userId) return null
 
   const { data, error } = await supabase
@@ -106,6 +111,45 @@ export async function setOptIn(value: boolean): Promise<boolean> {
 }
 
 /**
+ * The outcome of the panel's opt-in toggle, which is more than the write
+ * succeeding: opt-in is future-only, so the handler re-checks today's
+ * submission state immediately before writing and may refuse.
+ *
+ * 'saved'   — written, and the profile reloaded.
+ * 'locked'  — something is already frozen for today, so the setting cannot
+ *             honestly move until tomorrow.
+ * 'unknown' — today's state could not be confirmed; refusing is the safe
+ *             default, since a flip we cannot justify may misrepresent the board.
+ * 'failed'  — the write itself did not land.
+ */
+export type OptInResult = 'saved' | 'locked' | 'unknown' | 'failed'
+
+/**
+ * Whether the claim gate is up: a signed-in user with no name has not finished
+ * signing in, so the panel force-opens with no Close button and the timer is
+ * held. It is the riskiest condition in the feature -- every input must be
+ * genuinely known -- so it lives here as one pure function rather than being
+ * spelled out inline in both App and AuthPanel.
+ *
+ * `failed` is the load that could not tell us anything, and it must NOT gate:
+ * stranding someone who already has a username behind a modal whose only exit
+ * is Sign out is worse than briefly showing them a retry.
+ */
+export function shouldClaimUsername({
+  email,
+  loading,
+  failed,
+  profile,
+}: {
+  email: string | null
+  loading: boolean
+  failed: boolean
+  profile: Profile | null
+}): boolean {
+  return Boolean(email) && !loading && !failed && !profile
+}
+
+/**
  * Loads the signed-in user's profile, and reloads it after a write.
  *
  * `fetchProfile` throws on a genuine query error (expired JWT, network blip,
@@ -120,29 +164,43 @@ export function useProfile(email: string | null) {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
+  // Mirrors `profile` for the reload path, which needs to know whether there
+  // is already something good on screen without taking `profile` as a
+  // dependency and rebuilding the callback on every load.
+  const loaded = useRef<Profile | null>(null)
 
   const reload = useCallback(async () => {
     try {
       const p = await fetchProfile()
+      loaded.current = p
       setProfile(p)
       setFailed(false)
     } catch {
-      setFailed(true)
+      // A refresh that fails after a successful write must not replace a
+      // working account panel with an error. `failed` means "there is nothing
+      // to show", not "the last request failed".
+      if (!loaded.current) setFailed(true)
     }
   }, [])
 
   useEffect(() => {
     if (!email) {
+      loaded.current = null
       setProfile(null)
       setLoading(false)
       setFailed(false)
       return
     }
     let live = true
+    // A different account's profile is not this one's: drop it before the
+    // fetch, or a failure here would leave the previous user's name on screen.
+    loaded.current = null
+    setProfile(null)
     setLoading(true)
     fetchProfile()
       .then((p) => {
         if (!live) return
+        loaded.current = p
         setProfile(p)
         setFailed(false)
         setLoading(false)

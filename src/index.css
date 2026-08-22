@@ -486,6 +486,13 @@ button.small { padding: 2px 8px; font-size: var(--t-xs); }
 .switch input:checked + span { background: var(--text); }
 .switch input:checked + span::after { transform: translateX(20px); background: var(--panel); }
 .switch input:focus-visible + span { outline: 2px solid var(--text); outline-offset: 2px; }
+/* The opt-in lock is the first disabled switch here. Without an appearance for
+   it the control looks and feels live on both surfaces, and the ignored click
+   reads as a bug rather than as the setting being settled for the day.
+   Fading against --panel keeps it right in either theme. */
+.switch:has(input:disabled) { cursor: default; }
+.switch input:disabled { cursor: default; }
+.switch input:disabled + span { opacity: 0.4; }
 
 .typed {
   display: flex;

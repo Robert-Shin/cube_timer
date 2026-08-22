@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { SyncState } from './sync/engine'
-import type { ClaimResult, Profile } from './profile'
-import { normalizeUsername, validateUsername } from './profile'
+import type { ClaimResult, OptInResult, Profile } from './profile'
+import { normalizeUsername, shouldClaimUsername, validateUsername } from './profile'
 
 /** Sign-in and sync status. Hidden entirely when sync is not configured. */
 /**
@@ -31,6 +31,7 @@ export function AuthPanel({
   onClaim,
   submittedToday,
   onSetOptIn,
+  onReload,
 }: {
   state: SyncState
   email: string | null
@@ -45,7 +46,8 @@ export function AuthPanel({
   onClose: () => void
   onClaim: (name: string) => Promise<ClaimResult>
   submittedToday: boolean | null
-  onSetOptIn: (value: boolean) => Promise<boolean>
+  onSetOptIn: (value: boolean) => Promise<OptInResult>
+  onReload: () => Promise<void>
 }) {
   const [address, setAddress] = useState('')
   const [sent, setSent] = useState(false)
@@ -58,6 +60,22 @@ export function AuthPanel({
   const [renaming, setRenaming] = useState(false)
   const [optBusy, setOptBusy] = useState(false)
   const [optInError, setOptInError] = useState<string | null>(null)
+  const [retrying, setRetrying] = useState(false)
+
+  const retry = async () => {
+    setRetrying(true)
+    await onReload()
+    setRetrying(false)
+  }
+
+  // The profile lives in App, not here, so a failure from an earlier load
+  // survives closing and reopening this panel. Reopening it is the user's
+  // obvious "try again", so make it one. Empty deps on purpose: the panel is
+  // unmounted when closed, so this fires once per open, and depending on
+  // profileFailed would re-fire on every retry that fails.
+  useEffect(() => {
+    if (profileFailed) void retry()
+  }, [])
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -70,7 +88,8 @@ export function AuthPanel({
     else setSent(true)
   }
 
-  // Returns the outcome so the rename form in Task 5 can stay open on failure.
+  // Returns the outcome rather than swallowing it: a claim that fails must
+  // leave the form open with what the user typed still in it.
   const claim = async (e: React.FormEvent): Promise<ClaimResult> => {
     e.preventDefault()
     const tidy = normalizeUsername(name)
@@ -89,11 +108,14 @@ export function AuthPanel({
     return result
   }
 
-  // A signed-in user with no username has not finished signing in: the only
-  // ways out are claiming a name or signing out. A load failure is different
-  // — it must never strand someone who already has a username, so it keeps
-  // Close available.
-  const gateActive = Boolean(email) && !profileLoading && !profileFailed && !profile
+  // Shared with App, which uses the same predicate to force this panel open.
+  // See shouldClaimUsername for why a load failure must not gate.
+  const gateActive = shouldClaimUsername({
+    email,
+    loading: profileLoading,
+    failed: profileFailed,
+    profile,
+  })
 
   return (
     <div
@@ -116,9 +138,19 @@ export function AuthPanel({
           profileLoading ? (
             <p className="note">Loading your account…</p>
           ) : profileFailed ? (
-            <p className="error">
-              Could not load your account. Check your connection and try again.
-            </p>
+            <>
+              <p className="error">
+                Could not load your account. Check your connection and try again.
+              </p>
+              <div className="modal-actions">
+                <button className="primary" onClick={retry} disabled={retrying}>
+                  {retrying ? 'trying…' : 'try again'}
+                </button>
+                <button className="ghost" onClick={onSignOut}>
+                  Sign out
+                </button>
+              </div>
+            </>
           ) : !profile ? (
             <>
               <p className="note">
@@ -180,6 +212,20 @@ export function AuthPanel({
                     <button className="primary" type="submit" disabled={claiming || !name.trim()}>
                       {claiming ? 'saving…' : 'save'}
                     </button>
+                    {/* Opening the rename form replaces the button that opened
+                        it, so without this the only exits are a successful save
+                        or closing the whole panel. */}
+                    <button
+                      className="ghost"
+                      type="button"
+                      disabled={claiming}
+                      onClick={() => {
+                        setRenaming(false)
+                        setClaimError(null)
+                      }}
+                    >
+                      cancel
+                    </button>
                   </form>
                   {claimError && <p className="error">{claimError}</p>}
                 </>
@@ -213,8 +259,20 @@ export function AuthPanel({
                     disabled={submittedToday !== false || optBusy}
                     onChange={async (e) => {
                       setOptBusy(true)
-                      const ok = await onSetOptIn(e.target.checked)
-                      setOptInError(ok ? null : 'Could not save that. Check your connection and try again.')
+                      // The handler re-checks the lock before writing and can
+                      // refuse, so say which of the four things happened — the
+                      // checkbox is controlled by profile.optedIn and will snap
+                      // back on its own, which alone reads as a broken control.
+                      const result = await onSetOptIn(e.target.checked)
+                      setOptInError(
+                        result === 'saved'
+                          ? null
+                          : result === 'locked'
+                            ? 'You have already posted today, so this cannot change until tomorrow.'
+                            : result === 'unknown'
+                              ? "Today's status could not be confirmed, so this is locked for now."
+                              : 'Could not save that. Check your connection and try again.',
+                      )
                       setOptBusy(false)
                     }}
                   />

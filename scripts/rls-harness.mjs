@@ -325,6 +325,15 @@ try {
     assert(data.username === `h${stamp}`, `A's username became ${data.username}`)
   })
 
+  // The same boundary, on the column that actually decides board visibility:
+  // username only changes a label, opted_in puts someone on a public list. A
+  // policy that covered one but not the other would pass the check above.
+  await check('user B cannot opt user A in', async () => {
+    await b.client.from('profiles').update({ opted_in: true }).eq('user_id', a.userId)
+    const { data } = await admin.from('profiles').select('opted_in').eq('user_id', a.userId).single()
+    assert(data.opted_in === false, `A's opted_in became ${data.opted_in}`)
+  })
+
   // Case-insensitive uniqueness. Written with the service role deliberately: this
   // must be the index refusing it, not client-side validation.
   await check('a name differing only in case is rejected', async () => {

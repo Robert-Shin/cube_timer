@@ -12,7 +12,7 @@ import { touch, tombstone } from './sync/stamp'
 import { visible } from './sync/merge'
 import { useSync } from './sync/engine'
 import { AuthPanel } from './AuthPanel'
-import { claimUsername, setOptIn, useProfile } from './profile'
+import { claimUsername, setOptIn, shouldClaimUsername, useProfile } from './profile'
 import { hasSubmittedToday } from './dailyClient'
 import { syncConfigured } from './supabase'
 import { Histogram } from './charts/Histogram'
@@ -86,12 +86,17 @@ export default function App() {
     reload: reloadProfile,
   } = useProfile(sync.email)
 
-  // A signed-in user with no name has not finished signing in. A load
-  // failure is different — the failed state keeps Close available in
-  // AuthPanel, so it must not force the panel open here either.
+  // Same predicate AuthPanel gates on, so the panel that opens here is
+  // guaranteed to be the one with no Close button — and vice versa.
+  const gateActive = shouldClaimUsername({
+    email: sync.email,
+    loading: profileLoading,
+    failed: profileFailed,
+    profile,
+  })
   useEffect(() => {
-    if (sync.email && !profileLoading && !profileFailed && !profile) setShowAuth(true)
-  }, [sync.email, profileLoading, profileFailed, profile])
+    if (gateActive) setShowAuth(true)
+  }, [gateActive])
 
   // Whether opting in/out would actually change today's board. null means
   // "not yet known" (still loading, or the check failed) and the toggle
@@ -100,8 +105,13 @@ export default function App() {
   // so fetched only when the panel is open with a claimed profile, not on
   // every render.
   const [submittedToday, setSubmittedToday] = useState<boolean | null>(null)
+  // Keyed on whether there is a profile at all, never on the object: every
+  // successful rename or toggle produces a fresh object, and re-running this
+  // would blank the label back to "could not be confirmed" and grey the switch
+  // for a round trip immediately after the write that just worked.
+  const hasProfile = profile !== null
   useEffect(() => {
-    if (!showAuth || !profile) return
+    if (!showAuth || !hasProfile) return
     let live = true
     setSubmittedToday(null)
     hasSubmittedToday().then((v) => {
@@ -110,7 +120,7 @@ export default function App() {
     return () => {
       live = false
     }
-  }, [showAuth, profile])
+  }, [showAuth, hasProfile])
 
   // The blob URL is owned by this component: whatever it points at must be
   // revoked when it is replaced, or every change leaks the previous photo.
@@ -811,10 +821,20 @@ export default function App() {
             return result
           }}
           submittedToday={submittedToday}
+          onReload={reloadProfile}
           onSetOptIn={async (value) => {
+            // The lock is re-checked here, not just when the panel opened: a
+            // submission queued offline can flush on a sync tick while the
+            // panel sits open, freezing `published` from the opt-in as it was.
+            // A flip after that would leave the name on the ranked board while
+            // the UI claimed otherwise. Refuse on anything but a definite no.
+            const settled = await hasSubmittedToday()
+            setSubmittedToday(settled)
+            if (settled !== false) return settled === null ? 'unknown' : 'locked'
+
             const ok = await setOptIn(value)
             if (ok) await reloadProfile()
-            return ok
+            return ok ? 'saved' : 'failed'
           }}
         />
       )}
