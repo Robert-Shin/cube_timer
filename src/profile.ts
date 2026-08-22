@@ -3,6 +3,7 @@
  * it. Kept apart from dailyClient.ts, which owns the daily tables.
  */
 
+import { useCallback, useEffect, useState } from 'react'
 import { supabase } from './supabase'
 
 /** Mirrors the `profiles_username_format` check constraint in schema.sql. */
@@ -102,4 +103,59 @@ export async function setOptIn(value: boolean): Promise<boolean> {
     .eq('user_id', userId)
 
   return !error
+}
+
+/**
+ * Loads the signed-in user's profile, and reloads it after a write.
+ *
+ * `fetchProfile` throws on a genuine query error (expired JWT, network blip,
+ * RLS misconfiguration) rather than returning null for it — null is reserved
+ * for "signed in with no name yet" or "not signed in", which is exactly the
+ * state that opens the claim gate. So a thrown error is caught here and
+ * surfaced as `failed`, never collapsed into `profile === null`: a network
+ * blip must not strand someone who already has a username in a gate whose
+ * only way out is Sign out.
+ */
+export function useProfile(email: string | null) {
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [failed, setFailed] = useState(false)
+
+  const reload = useCallback(async () => {
+    try {
+      const p = await fetchProfile()
+      setProfile(p)
+      setFailed(false)
+    } catch {
+      setFailed(true)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!email) {
+      setProfile(null)
+      setLoading(false)
+      setFailed(false)
+      return
+    }
+    let live = true
+    setLoading(true)
+    fetchProfile()
+      .then((p) => {
+        if (!live) return
+        setProfile(p)
+        setFailed(false)
+        setLoading(false)
+      })
+      .catch(() => {
+        if (!live) return
+        setFailed(true)
+        setLoading(false)
+      })
+    return () => {
+      live = false
+    }
+  }, [email])
+
+  return { profile, loading, failed, reload }
 }

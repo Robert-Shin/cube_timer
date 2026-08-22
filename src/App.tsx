@@ -12,6 +12,7 @@ import { touch, tombstone } from './sync/stamp'
 import { visible } from './sync/merge'
 import { useSync } from './sync/engine'
 import { AuthPanel } from './AuthPanel'
+import { claimUsername, useProfile } from './profile'
 import { syncConfigured } from './supabase'
 import { Histogram } from './charts/Histogram'
 import { PracticeCalendar } from './charts/PracticeCalendar'
@@ -77,6 +78,19 @@ export default function App() {
   }, [store])
 
   const sync = useSync(store, setStore)
+  const {
+    profile,
+    loading: profileLoading,
+    failed: profileFailed,
+    reload: reloadProfile,
+  } = useProfile(sync.email)
+
+  // A signed-in user with no name has not finished signing in. A load
+  // failure is different — the failed state keeps Close available in
+  // AuthPanel, so it must not force the panel open here either.
+  useEffect(() => {
+    if (sync.email && !profileLoading && !profileFailed && !profile) setShowAuth(true)
+  }, [sync.email, profileLoading, profileFailed, profile])
 
   // The blob URL is owned by this component: whatever it points at must be
   // revoked when it is replaced, or every change leaks the previous photo.
@@ -764,10 +778,18 @@ export default function App() {
           email={sync.email}
           error={sync.error}
           lastSyncedAt={sync.lastSyncedAt}
+          profile={profile}
+          profileLoading={profileLoading}
+          profileFailed={profileFailed}
           onSignIn={sync.signIn}
           onSignOut={sync.signOut}
           onSyncNow={sync.syncNow}
           onClose={() => setShowAuth(false)}
+          onClaim={async (name) => {
+            const result = await claimUsername(name)
+            if (result === 'claimed') await reloadProfile()
+            return result
+          }}
         />
       )}
       {toast && <div className="toast">{toast}</div>}
