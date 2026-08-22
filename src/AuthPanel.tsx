@@ -44,7 +44,7 @@ export function AuthPanel({
   onSyncNow: () => void
   onClose: () => void
   onClaim: (name: string) => Promise<ClaimResult>
-  submittedToday: boolean
+  submittedToday: boolean | null
   onSetOptIn: (value: boolean) => Promise<boolean>
 }) {
   const [address, setAddress] = useState('')
@@ -57,6 +57,7 @@ export function AuthPanel({
   const [claiming, setClaiming] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [optBusy, setOptBusy] = useState(false)
+  const [optInError, setOptInError] = useState<string | null>(null)
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -198,25 +199,29 @@ export function AuthPanel({
                 <div>
                   <strong>Show me on the leaderboard</strong>
                   <p>
-                    {submittedToday
-                      ? 'You have already posted today, so this takes effect tomorrow.'
-                      : 'Your username and your daily time become visible to other signed-in users.'}
+                    {submittedToday === null
+                      ? "Today's status could not be confirmed, so this is locked for now."
+                      : submittedToday
+                        ? 'You have already posted today, so this takes effect tomorrow.'
+                        : 'Your username and your daily time become visible to other signed-in users.'}
                   </p>
                 </div>
                 <label className="switch">
                   <input
                     type="checkbox"
                     checked={profile.optedIn}
-                    disabled={submittedToday || optBusy}
+                    disabled={submittedToday !== false || optBusy}
                     onChange={async (e) => {
                       setOptBusy(true)
-                      await onSetOptIn(e.target.checked)
+                      const ok = await onSetOptIn(e.target.checked)
+                      setOptInError(ok ? null : 'Could not save that. Check your connection and try again.')
                       setOptBusy(false)
                     }}
                   />
                   <span />
                 </label>
               </div>
+              {optInError && <p className="error">{optInError}</p>}
 
               <div className="stat">
                 <span>Status</span>

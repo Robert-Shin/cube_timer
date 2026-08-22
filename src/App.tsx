@@ -93,13 +93,17 @@ export default function App() {
     if (sync.email && !profileLoading && !profileFailed && !profile) setShowAuth(true)
   }, [sync.email, profileLoading, profileFailed, profile])
 
-  // Whether opting in/out would actually change today's board. A network
-  // call, so fetched only when the panel is open with a claimed profile, not
-  // on every render.
-  const [submittedToday, setSubmittedToday] = useState(false)
+  // Whether opting in/out would actually change today's board. null means
+  // "not yet known" (still loading, or the check failed) and the toggle
+  // stays locked until it resolves to true or false -- defaulting to enabled
+  // would let a flip land before we know whether it is safe. A network call,
+  // so fetched only when the panel is open with a claimed profile, not on
+  // every render.
+  const [submittedToday, setSubmittedToday] = useState<boolean | null>(null)
   useEffect(() => {
     if (!showAuth || !profile) return
     let live = true
+    setSubmittedToday(null)
     hasSubmittedToday().then((v) => {
       if (live) setSubmittedToday(v)
     })

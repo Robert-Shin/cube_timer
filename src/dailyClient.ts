@@ -223,12 +223,21 @@ export async function fetchBoard(event: EventId, day: string): Promise<BoardRow[
  *
  * No event filter: an attempt row can only exist for an event that had a
  * scramble to reveal, which is exactly the challenge events.
+ *
+ * Returns null when we could not tell (no session, or the query failed).
+ * REVISION: this used to fail open (return false) on a query error, on the
+ * theory that the worst case was a toggle whose effect was already moot for
+ * today. That was wrong -- the real cost of guessing false is a user who
+ * believes they have opted out when they have not, because the toggle stayed
+ * enabled while we could not actually confirm today's state. Callers must
+ * treat null as "not yet known", not as "not submitted", and if we cannot
+ * even read this, a write would very likely fail too.
  */
-export async function hasSubmittedToday(): Promise<boolean> {
-  if (!supabase) return false
+export async function hasSubmittedToday(): Promise<boolean | null> {
+  if (!supabase) return null
   const { data: auth } = await supabase.auth.getUser()
   const userId = auth.user?.id
-  if (!userId) return false
+  if (!userId) return null
 
   const { data, error } = await supabase
     .from('daily_attempts')
@@ -238,9 +247,7 @@ export async function hasSubmittedToday(): Promise<boolean> {
     .not('submitted_at', 'is', null)
     .limit(1)
 
-  // Fail open: submit_daily freezes `published` server-side at submission time,
-  // so the worst case is offering a toggle whose effect is already moot for today.
-  if (error) return false
+  if (error) return null
 
   return (data ?? []).length > 0
 }
