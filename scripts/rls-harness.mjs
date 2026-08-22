@@ -555,9 +555,17 @@ try {
   // already deleted) must not stop the others from being attempted, and
   // must not change the script's exit code -- that reflects the
   // assertions, not this housekeeping.
+  // deleteUser RESOLVES with { data, error } rather than throwing, so the
+  // catch below never fires on an ordinary API failure -- the error has to be
+  // read off the result. Trusting the catch alone let two throwaway accounts,
+  // their profile row and a sentinel attempt survive a real run and sit in
+  // production until they were found by hand.
   for (const userId of createdUserIds) {
     try {
-      await admin.auth.admin.deleteUser(userId)
+      const { error } = await admin.auth.admin.deleteUser(userId)
+      if (error) {
+        console.warn(`WARNING: failed to delete throwaway account ${userId} — ${error.message}. Remove it manually.`)
+      }
     } catch (e) {
       console.warn(`WARNING: failed to delete throwaway account ${userId} — ${e.message}. Remove it manually.`)
     }
