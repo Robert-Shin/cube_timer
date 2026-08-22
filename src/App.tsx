@@ -12,7 +12,8 @@ import { touch, tombstone } from './sync/stamp'
 import { visible } from './sync/merge'
 import { useSync } from './sync/engine'
 import { AuthPanel } from './AuthPanel'
-import { claimUsername, useProfile } from './profile'
+import { claimUsername, setOptIn, useProfile } from './profile'
+import { hasSubmittedToday } from './dailyClient'
 import { syncConfigured } from './supabase'
 import { Histogram } from './charts/Histogram'
 import { PracticeCalendar } from './charts/PracticeCalendar'
@@ -91,6 +92,21 @@ export default function App() {
   useEffect(() => {
     if (sync.email && !profileLoading && !profileFailed && !profile) setShowAuth(true)
   }, [sync.email, profileLoading, profileFailed, profile])
+
+  // Whether opting in/out would actually change today's board. A network
+  // call, so fetched only when the panel is open with a claimed profile, not
+  // on every render.
+  const [submittedToday, setSubmittedToday] = useState(false)
+  useEffect(() => {
+    if (!showAuth || !profile) return
+    let live = true
+    hasSubmittedToday().then((v) => {
+      if (live) setSubmittedToday(v)
+    })
+    return () => {
+      live = false
+    }
+  }, [showAuth, profile])
 
   // The blob URL is owned by this component: whatever it points at must be
   // revoked when it is replaced, or every change leaks the previous photo.
@@ -789,6 +805,12 @@ export default function App() {
             const result = await claimUsername(name)
             if (result === 'claimed') await reloadProfile()
             return result
+          }}
+          submittedToday={submittedToday}
+          onSetOptIn={async (value) => {
+            const ok = await setOptIn(value)
+            if (ok) await reloadProfile()
+            return ok
           }}
         />
       )}

@@ -29,6 +29,8 @@ export function AuthPanel({
   onSyncNow,
   onClose,
   onClaim,
+  submittedToday,
+  onSetOptIn,
 }: {
   state: SyncState
   email: string | null
@@ -42,6 +44,8 @@ export function AuthPanel({
   onSyncNow: () => void
   onClose: () => void
   onClaim: (name: string) => Promise<ClaimResult>
+  submittedToday: boolean
+  onSetOptIn: (value: boolean) => Promise<boolean>
 }) {
   const [address, setAddress] = useState('')
   const [sent, setSent] = useState(false)
@@ -51,6 +55,8 @@ export function AuthPanel({
   const [name, setName] = useState('')
   const [claimError, setClaimError] = useState<string | null>(null)
   const [claiming, setClaiming] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [optBusy, setOptBusy] = useState(false)
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -148,6 +154,71 @@ export function AuthPanel({
                 from.
               </p>
               <div className="stat">
+                <span>Name</span>
+                <strong>{profile.username}</strong>
+              </div>
+              {renaming ? (
+                <>
+                  <form
+                    className="auth-form"
+                    onSubmit={async (e) => {
+                      // Only close on success -- a taken name must keep the
+                      // form open with its message, not silently discard the
+                      // edit.
+                      if ((await claim(e)) === 'claimed') setRenaming(false)
+                    }}
+                  >
+                    <input
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="New name"
+                      aria-label="New username"
+                      maxLength={20}
+                      autoFocus
+                    />
+                    <button className="primary" type="submit" disabled={claiming || !name.trim()}>
+                      {claiming ? 'saving…' : 'save'}
+                    </button>
+                  </form>
+                  {claimError && <p className="error">{claimError}</p>}
+                </>
+              ) : (
+                <button
+                  className="ghost small"
+                  onClick={() => {
+                    setName(profile.username)
+                    setRenaming(true)
+                  }}
+                >
+                  change name
+                </button>
+              )}
+
+              <div className="setting">
+                <div>
+                  <strong>Show me on the leaderboard</strong>
+                  <p>
+                    {submittedToday
+                      ? 'You have already posted today, so this takes effect tomorrow.'
+                      : 'Your username and your daily time become visible to other signed-in users.'}
+                  </p>
+                </div>
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    checked={profile.optedIn}
+                    disabled={submittedToday || optBusy}
+                    onChange={async (e) => {
+                      setOptBusy(true)
+                      await onSetOptIn(e.target.checked)
+                      setOptBusy(false)
+                    }}
+                  />
+                  <span />
+                </label>
+              </div>
+
+              <div className="stat">
                 <span>Status</span>
                 <strong>{state === 'error' ? 'error' : state}</strong>
               </div>
@@ -187,7 +258,7 @@ export function AuthPanel({
             </p>
             <p className="note">
               Sign-in is still limited while this is in testing, so the email may not arrive. The
-              The timer works fully without an account; your solves are saved in this browser.
+              timer works fully without an account; your solves are saved in this browser.
             </p>
             <form className="auth-form" onSubmit={submit}>
               <input
