@@ -156,6 +156,7 @@ async function expectOneRow(label, query) {
 const REQUIRED_TABLES = [
   'sessions', 'solves', 'profiles',
   'daily_scrambles', 'daily_attempts', 'daily_bests',
+  'friendships',
 ]
 for (const table of REQUIRED_TABLES) {
   const { error } = await admin.from(table).select('*').limit(1)
