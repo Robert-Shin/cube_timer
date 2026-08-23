@@ -1,7 +1,29 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { classifyRequestError, partitionFriendships } from './friends'
 
 const ME = 'me-uuid'
+
+describe('friendProfile', () => {
+  it('resolves to null, not a rejected promise, when the fetch layer fails outright', async () => {
+    // Simulates offline/DNS/TLS: supabase-js rejects rather than resolving
+    // with an `error` field. friendProfile's docstring promises null means
+    // failure; before the fix, this rejection escaped the Promise.all and
+    // the caller got an unhandled rejection instead.
+    vi.resetModules()
+    vi.doMock('./supabase', () => ({
+      supabase: {
+        rpc: vi.fn().mockRejectedValue(new TypeError('Failed to fetch')),
+      },
+      syncConfigured: true,
+    }))
+
+    const { friendProfile } = await import('./friends')
+    await expect(friendProfile('friend-uuid', '333', 30)).resolves.toBeNull()
+
+    vi.doUnmock('./supabase')
+    vi.resetModules()
+  })
+})
 
 describe('partitionFriendships', () => {
   it('splits a pending request by which side I am on', () => {
