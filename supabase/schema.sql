@@ -463,6 +463,42 @@ drop policy if exists friend_delete on public.friendships;
 create policy friend_delete on public.friendships for delete
   using (auth.uid() in (requester, addressee));
 
+-- Column-level UPDATE grant, layered beneath the policy above -- not a
+-- replacement for it. Finding C1: friend_accept's `with check` is evaluated
+-- against the NEW row only; Postgres RLS gives it no way to see what the row
+-- USED to be. So a `with check (auth.uid() = addressee and state =
+-- 'accepted')` can only ever confirm the row's addressee is unchanged and its
+-- new state is 'accepted' -- it has no clause available to it, at the SQL
+-- level, that could pin `requester` to its old value. That let the addressee
+-- of a pending request accept it while simultaneously rewriting `requester`
+-- to an arbitrary third party, making a stranger appear to be an accepted
+-- friend of that third party without that person ever sending or receiving
+-- anything. Same failure shape as `profiles` at the top of this file: a
+-- row-level policy is not a column-level one, and PostgREST's default
+-- `grant all on tables to authenticated` silently permits every column to be
+-- rewritten unless something narrower replaces it.
+--
+-- The fix is not a smarter policy predicate -- no predicate over the NEW row
+-- alone can express "and requester didn't change" -- it's removing the
+-- privilege to touch `requester` (or `addressee`) via UPDATE at all. A client
+-- may SELECT its own rows, INSERT a pending request, DELETE either side (see
+-- the policies above, which still gate all of those and remain necessary),
+-- and UPDATE only the `state` column. That closes both redirect directions
+-- (rewriting `requester` OR `addressee`) at the privilege layer, beneath any
+-- policy, which is strictly stronger than trying to patch the policy
+-- predicate: even a future policy bug or a dropped `with check` clause still
+-- can't move these two columns via UPDATE.
+--
+-- Do not simplify this back to `grant update on public.friendships to
+-- authenticated` -- that is exactly the default this block exists to
+-- override, and exactly what reopens Finding C1.
+revoke all on public.friendships from anon;
+revoke all on public.friendships from authenticated;
+grant select (requester, addressee, state, created_at) on public.friendships to authenticated;
+grant insert (requester, addressee, state) on public.friendships to authenticated;
+grant update (state) on public.friendships to authenticated;
+grant delete on public.friendships to authenticated;
+
 -- Reading another user's solves is the one thing RLS cannot express, so it is
 -- the only place security definer appears. RLS DOES NOT APPLY inside these
 -- functions: the are_friends check IS the boundary, in full. Same posture as
