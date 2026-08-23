@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { listFriends, respond, sendRequest, unfriend, type Partitioned } from './friends'
 
 const MESSAGES: Record<string, string> = {
@@ -6,6 +6,10 @@ const MESSAGES: Record<string, string> = {
   already: 'You have already sent a request, or you are already friends.',
   retry: 'Could not send that request. Try again.',
 }
+
+const ACCEPT_FAILED = 'Could not accept that request. Try again.'
+const DECLINE_FAILED = 'Could not decline that request. Try again.'
+const REMOVE_FAILED = 'Could not remove that friend. Try again.'
 
 export function FriendsPanel({
   onOpen,
@@ -16,18 +20,32 @@ export function FriendsPanel({
   const [name, setName] = useState('')
   const [note, setNote] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Keyed by the other user's id -- a request row and a friend row for the
+  // same person never coexist, so one id is enough to guard both "in
+  // flight" and "last action failed" per row.
+  const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
+  const [rowErrors, setRowErrors] = useState<Map<string, string>>(new Map())
+
+  // Consulted by every await-then-setState path below, not just the initial
+  // load: this panel lives inside a closeable modal, so a close mid-request
+  // is a real path, not a hypothetical one.
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
 
   const refresh = useCallback(async () => {
     const next = await listFriends()
-    setData(next)
+    if (mounted.current) setData(next)
   }, [])
 
   useEffect(() => {
-    let live = true
-    listFriends().then((d) => live && setData(d))
-    return () => {
-      live = false
-    }
+    listFriends().then((d) => {
+      if (mounted.current) setData(d)
+    })
   }, [])
 
   const submit = async (e: React.FormEvent) => {
@@ -35,6 +53,7 @@ export function FriendsPanel({
     if (!name.trim() || busy) return
     setBusy(true)
     const outcome = await sendRequest(name)
+    if (!mounted.current) return
     setBusy(false)
     if (outcome === 'sent') {
       setName('')
@@ -44,6 +63,42 @@ export function FriendsPanel({
       setNote(MESSAGES[outcome])
     }
   }
+
+  const clearRowError = (id: string) => {
+    setRowErrors((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Map(prev)
+      next.delete(id)
+      return next
+    })
+  }
+
+  const setRowError = (id: string, msg: string) => {
+    setRowErrors((prev) => new Map(prev).set(id, msg))
+  }
+
+  const withRowBusy = async (id: string, action: () => Promise<boolean>, failMsg: string) => {
+    if (busyIds.has(id)) return
+    setBusyIds((prev) => new Set(prev).add(id))
+    const ok = await action()
+    if (!mounted.current) return
+    setBusyIds((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+    if (ok) {
+      clearRowError(id)
+      await refresh()
+    } else {
+      setRowError(id, failMsg)
+    }
+  }
+
+  const handleRespond = (id: string, accept: boolean) =>
+    withRowBusy(id, () => respond(id, accept), accept ? ACCEPT_FAILED : DECLINE_FAILED)
+
+  const handleUnfriend = (id: string) => withRowBusy(id, () => unfriend(id), REMOVE_FAILED)
 
   if (data === null) return <p className="note">Loading friends…</p>
 
@@ -72,12 +127,13 @@ export function FriendsPanel({
             {p.incoming.map((id) => (
               <li key={id}>
                 {label(id)}
-                <button onClick={async () => { await respond(id, true); await refresh() }}>
+                <button disabled={busyIds.has(id)} onClick={() => handleRespond(id, true)}>
                   Accept
                 </button>
-                <button onClick={async () => { await respond(id, false); await refresh() }}>
+                <button disabled={busyIds.has(id)} onClick={() => handleRespond(id, false)}>
                   Decline
                 </button>
+                {rowErrors.get(id) && <p className="error">{rowErrors.get(id)}</p>}
               </li>
             ))}
           </ul>
@@ -94,9 +150,10 @@ export function FriendsPanel({
               <button className="link" onClick={() => onOpen(id, label(id))}>
                 {label(id)}
               </button>
-              <button onClick={async () => { await unfriend(id); await refresh() }}>
+              <button disabled={busyIds.has(id)} onClick={() => handleUnfriend(id)}>
                 Remove
               </button>
+              {rowErrors.get(id) && <p className="error">{rowErrors.get(id)}</p>}
             </li>
           ))}
         </ul>
