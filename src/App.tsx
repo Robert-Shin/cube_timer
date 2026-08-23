@@ -12,6 +12,7 @@ import { touch, tombstone } from './sync/stamp'
 import { visible } from './sync/merge'
 import { useSync } from './sync/engine'
 import { AuthPanel } from './AuthPanel'
+import { FriendsPanel } from './FriendsPanel'
 import { claimUsername, setOptIn, shouldClaimUsername, useProfile } from './profile'
 import { hasSubmittedToday } from './dailyClient'
 import { syncConfigured } from './supabase'
@@ -836,6 +837,19 @@ export default function App() {
             if (ok) await reloadProfile()
             return ok ? 'saved' : 'failed'
           }}
+        />
+      )}
+      {/* Same signed-in predicate as AuthPanel (see the comment at line ~89),
+          plus a check that the claim gate isn't showing: friendships have a
+          foreign key to profiles(user_id), so a user with no claimed
+          username can neither befriend nor be found by anyone, and the gate
+          is deliberately inescapable while active. */}
+      {sync.email && !gateActive && (
+        <FriendsPanel
+          // Task 8 wires this to open FriendProfile; a no-op for now keeps
+          // the panel functional without an unused-state build failure
+          // (noUnusedLocals) from a `<FriendProfile>` that doesn't exist yet.
+          onOpen={() => {}}
         />
       )}
       {toast && <div className="toast">{toast}</div>}
