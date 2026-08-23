@@ -915,6 +915,27 @@ try {
     )
   })
 
+  // The value assertions above read named fields (`solves`, `day_best`) and
+  // never enumerate the row's keys, so they pass just as well if a future
+  // edit adds an extra column alongside them -- e.g. `s.id as solve_id` or
+  // `s.session_id` picked up while refactoring the query. This project's
+  // entire premise is that friends see aggregates and never raw solve rows,
+  // so assert on the exact COLUMN SET, not a sampled value: a row that
+  // happens to lack a scramble or solve id proves nothing about a row that
+  // has one.
+  await check('friend_calendar: the row exposes no solve/scramble/session id', async () => {
+    const { data, error } = await a.client.rpc('friend_calendar', {
+      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND, p_since: '2000-01-01',
+    })
+    assert(!error, `unexpected error ${error?.message}`)
+    const keys = Object.keys(data[0]).sort()
+    const expected = ['day', 'day_best', 'solves']
+    assert(
+      JSON.stringify(keys) === JSON.stringify(expected),
+      `expected exactly columns ${JSON.stringify(expected)}, got ${JSON.stringify(keys)}`,
+    )
+  })
+
   // friend_stats has its own aggregation path (mine/recent CTEs plus an
   // outer `where public.are_friends(...)` guarding a FROM-less scalar
   // select) entirely separate from friend_calendar's. It deserves its own
@@ -935,6 +956,23 @@ try {
     assert(
       row.recent_ms[0] === friendSolveTimeMs,
       `expected recent_ms[0] ${friendSolveTimeMs}, got ${row.recent_ms[0]}`,
+    )
+  })
+
+  // Same reasoning as friend_calendar above: the value assertions read
+  // named fields and would not notice an extra leaked column (a solve id,
+  // scramble, or session id) riding alongside `total`/`best_ms`/`recent_ms`.
+  // Assert the exact column set.
+  await check('friend_stats: the row exposes no solve/scramble/session id', async () => {
+    const { data, error } = await a.client.rpc('friend_stats', {
+      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND,
+    })
+    assert(!error, `unexpected error ${error?.message}`)
+    const keys = Object.keys(data[0]).sort()
+    const expected = ['best_ms', 'recent_ms', 'total']
+    assert(
+      JSON.stringify(keys) === JSON.stringify(expected),
+      `expected exactly columns ${JSON.stringify(expected)}, got ${JSON.stringify(keys)}`,
     )
   })
 
