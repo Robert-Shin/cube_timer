@@ -270,6 +270,7 @@ const REQUIRED_FUNCTIONS = [
   // fails the preflight.
   { name: 'friend_calendar', args: { p_user: '00000000-0000-0000-0000-000000000000', p_event: '__preflight_probe__', p_since: '2000-01-01' } },
   { name: 'friend_stats', args: { p_user: '00000000-0000-0000-0000-000000000000', p_event: '__preflight_probe__' } },
+  { name: 'friend_daily', args: { p_user: '00000000-0000-0000-0000-000000000000', p_event: '__preflight_probe__' } },
 ]
 for (const { name, args } of REQUIRED_FUNCTIONS) {
   const { error } = await admin.rpc(name, args)
@@ -1047,6 +1048,140 @@ try {
       `expected exactly columns ${JSON.stringify(expected)}, got ${JSON.stringify(keys)}`,
     )
   })
+
+  // --------------------------------------------------------- friend_daily
+  //
+  // `security definer`, gated on the same `are_friends(auth.uid(), p_user)`
+  // boundary as friend_calendar/friend_stats above -- but with a
+  // deliberately different relationship to `published`/`opted_in`: those two
+  // read solves regardless of the board, because a friend's consent to be
+  // seen was never tied to the board in the first place. friend_daily is the
+  // one reader that COULD have reused the board's own policy
+  // (attempts_select_board) and deliberately doesn't, because that policy
+  // requires `published`, which requires `opted_in` -- and the spec's
+  // Decisions section says those must never gate a friend's view. So the
+  // fixture below seeds b with opted_in = FALSE and an UNPUBLISHED attempt on
+  // purpose: if this ever came back empty, that would mean someone "fixed"
+  // friend_daily to check published/opted_in after all, breaking the spec.
+  //
+  // No daily_scrambles row is needed for either fixture attempt below --
+  // unlike reveal_daily/submit_daily (called as b, which insert through the
+  // function and its FK-free but scramble-checked path), these rows are
+  // written directly via the service-role client, and daily_attempts itself
+  // has no foreign key to daily_scrambles.
+  const SENTINEL_EVENT_FRIEND_DAILY = '__harness_friend_daily__'
+  const SENTINEL_EVENT_FRIEND_DAILY_UNSUB = '__harness_friend_daily_unsub__'
+  const friendDailyTimeMs = 8888
+
+  // Explicit, not just relying on claimProfile's default: makes the "still
+  // visible despite being unpublished" claim below true by construction
+  // rather than by accident of whatever earlier assertion happened to run.
+  await admin.from('profiles').update({ opted_in: false }).eq('user_id', b.userId).throwOnError()
+
+  await check('setup: seed a SUBMITTED, UNPUBLISHED attempt for b (opted_in stays false)', async () => {
+    await admin.from('daily_attempts').insert({
+      user_id: b.userId, event: SENTINEL_EVENT_FRIEND_DAILY, utc_day: today,
+      submitted_at: new Date().toISOString(), time_ms: friendDailyTimeMs, penalty: 'plus2',
+      published: false,
+    }).throwOnError()
+    seededAttempts.push({ user_id: b.userId, event: SENTINEL_EVENT_FRIEND_DAILY, utc_day: today })
+  })
+
+  // Revealed but never submitted -- must never appear as a result.
+  await check('setup: seed a revealed-but-unsubmitted attempt for b', async () => {
+    await admin.from('daily_attempts').insert({
+      user_id: b.userId, event: SENTINEL_EVENT_FRIEND_DAILY_UNSUB, utc_day: today,
+    }).throwOnError()
+    seededAttempts.push({ user_id: b.userId, event: SENTINEL_EVENT_FRIEND_DAILY_UNSUB, utc_day: today })
+  })
+
+  // Positive control, FIRST and against the actual seeded values -- every
+  // negative assertion below is worthless without this: an empty result
+  // proves nothing if there was never anything to return in the first
+  // place.
+  await check('friend_daily: an accepted friend sees the submitted result', async () => {
+    const { data, error } = await a.client.rpc('friend_daily', {
+      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND_DAILY,
+    })
+    assert(!error, `unexpected error ${error?.message}`)
+    assert((data ?? []).length === 1, `expected 1 row, got ${(data ?? []).length}`)
+    assert(data[0].time_ms === friendDailyTimeMs, `expected time_ms ${friendDailyTimeMs}, got ${data[0].time_ms}`)
+    assert(data[0].penalty === 'plus2', `expected penalty 'plus2', got ${JSON.stringify(data[0].penalty)}`)
+  })
+
+  // THE load-bearing property of this feature: b never opted in to the
+  // public board (opted_in = false, forced above) and the seeded attempt is
+  // published = false -- the board path (attempts_select_board /
+  // bests_select_board) would show a accepted-friend NOTHING for this row.
+  // friend_daily must show it anyway, because accepting a friend request is
+  // its own consent, independent of opted_in. This is the same call as the
+  // positive control above; asserted again here, explicitly against a
+  // confirmed-unpublished row, so this specific claim has its own named
+  // failure rather than riding silently on the control above.
+  await check('friend_daily: visible to a friend even though b is not opted in / the attempt is unpublished', async () => {
+    const { data: profile } = await admin.from('profiles').select('opted_in').eq('user_id', b.userId).single()
+    assert(profile.opted_in === false, 'fixture invariant broken: b must be opted_in = false for this assertion to mean anything')
+    const { data: attemptRow } = await admin.from('daily_attempts').select('published')
+      .eq('user_id', b.userId).eq('event', SENTINEL_EVENT_FRIEND_DAILY).eq('utc_day', today).single()
+    assert(attemptRow.published === false, 'fixture invariant broken: the seeded attempt must be unpublished for this assertion to mean anything')
+
+    const { data, error } = await a.client.rpc('friend_daily', {
+      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND_DAILY,
+    })
+    assert(!error, `unexpected error ${error?.message}`)
+    assert((data ?? []).length === 1, `expected the unpublished result to still be visible to a friend, got ${(data ?? []).length} row(s)`)
+    assert(data[0].time_ms === friendDailyTimeMs, `expected time_ms ${friendDailyTimeMs}, got ${data[0].time_ms}`)
+  })
+
+  // A revealed-but-unsubmitted attempt must not appear, even to a friend.
+  await expectEmpty(
+    'friend_daily: a revealed-but-unsubmitted attempt does not appear',
+    a.client.rpc('friend_daily', {
+      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND_DAILY_UNSUB,
+    }),
+  )
+
+  // The row exposes exactly time and penalty -- no attempt id, revealed_at,
+  // or scramble. Assert the exact column set, not a sampled value: a row
+  // that happens to lack an id proves nothing about a row that has one.
+  await check('friend_daily: the row exposes exactly time_ms and penalty, nothing else', async () => {
+    const { data, error } = await a.client.rpc('friend_daily', {
+      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND_DAILY,
+    })
+    assert(!error, `unexpected error ${error?.message}`)
+    const keys = Object.keys(data[0]).sort()
+    const expected = ['penalty', 'time_ms']
+    assert(
+      JSON.stringify(keys) === JSON.stringify(expected),
+      `expected exactly columns ${JSON.stringify(expected)}, got ${JSON.stringify(keys)}`,
+    )
+  })
+
+  // c has no friendship with b at all (at this point in the run: b<->c
+  // pending is created later, below). If are_friends were removed from
+  // friend_daily's WHERE, this returns b's real result instead of an empty
+  // set, and fails.
+  await expectEmpty(
+    'friend_daily: a signed-in non-friend gets nothing',
+    c.client.rpc('friend_daily', {
+      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND_DAILY,
+    }),
+  )
+
+  // Same reasoning as friend_calendar/friend_stats above: an anonymous
+  // caller must be refused at the grant layer (permission denied), not
+  // merely see zero rows -- an empty result would mean anon reached the
+  // function body and are_friends(null, p_user) filtered it there, which is
+  // exactly the shape of the earlier live hole on this branch (EXECUTE
+  // granted to anon by Supabase's default privileges, `revoke ... from
+  // public` alone left it standing). Only expectPermissionDenied proves
+  // EXECUTE was actually revoked from anon.
+  await expectPermissionDenied(
+    'friend_daily: anon cannot execute the function at all (permission denied, not a filtered-empty result)',
+    anon.rpc('friend_daily', {
+      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND_DAILY,
+    }),
+  )
 
   // c has no friendship with b at all -- not pending, not accepted, nothing.
   // If are_friends were removed from friend_calendar's WHERE, this returns
