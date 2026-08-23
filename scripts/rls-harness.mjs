@@ -252,6 +252,11 @@ for (const { name, args } of REQUIRED_FUNCTIONS) {
   }
 }
 
+// Hoisted above the try so the finally block can see it regardless of where
+// (or whether) the friend_calendar/friend_stats assertions below manage to
+// run -- a mid-run throw must not strand the seeded session/solve.
+let friendSessionId = null
+
 try {
   const stamp = Date.now()
   const a = await asUser(`rls-a-${stamp}@example.test`)
@@ -833,6 +838,136 @@ try {
   // profiles(user_id) -> auth.users(id) on delete cascade, so deleting the
   // throwaway accounts removes them. seededProfiles is cleaned for the same
   // reason and is kept only for the case where account deletion itself fails.
+
+  // --------------------------------------------- friend_calendar / friend_stats
+  //
+  // These two functions are `security definer`: RLS does not apply inside
+  // them at all. The `public.are_friends(auth.uid(), p_user)` check baked
+  // into each is the ENTIRE boundary between "b's practice history" and
+  // "anyone holding the public anon key". At this point in the run,
+  // friendships holds exactly (a, b, accepted) and (a, c, pending) -- so a
+  // is the one accepted friend of b, c is a stranger to b, and d never
+  // enters this block.
+  //
+  // A sentinel event id, distinct from every other sentinel above and from
+  // every real challenge event id ('222', '333', '444', '555', '666', '777',
+  // 'minx', 'pyram', 'skewb', 'sq1', 'clock'), so this fixture can never be
+  // mistaken for a real board row even if cleanup below fails.
+  const SENTINEL_EVENT_FRIEND = '__harness_friend__'
+  friendSessionId = randomUUID()
+  const friendSolveTimeMs = 12345
+  await admin.from('sessions').insert({
+    id: friendSessionId, user_id: b.userId, name: 'harness',
+    event: SENTINEL_EVENT_FRIEND,
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  }).throwOnError()
+  await admin.from('solves').insert({
+    id: randomUUID(), user_id: b.userId, session_id: friendSessionId,
+    time_ms: friendSolveTimeMs, penalty: 'none',
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  }).throwOnError()
+
+  // Positive controls FIRST, and against the real, seeded solve's effective
+  // time -- not just "some rows came back". Every negative assertion below
+  // (expectEmpty) passes just as well if the fixture were never seeded, the
+  // event id were mistyped, or the row were marked deleted: an empty result
+  // proves nothing about the boundary on its own. Only once these two show
+  // that a genuine accepted friend gets the real data back does "a stranger
+  // gets nothing" mean "are_friends blocked it" rather than "there was
+  // nothing there to leak in the first place".
+  await check('friend_calendar: an accepted friend sees the calendar', async () => {
+    const { data, error } = await a.client.rpc('friend_calendar', {
+      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND, p_since: '2000-01-01',
+    })
+    assert(!error, `unexpected error ${error?.message}`)
+    assert((data ?? []).length === 1, `expected 1 day, got ${(data ?? []).length}`)
+    assert(data[0].solves === 1, `expected 1 solve, got ${data[0].solves}`)
+    assert(
+      data[0].day_best === friendSolveTimeMs,
+      `expected day_best ${friendSolveTimeMs}, got ${data[0].day_best}`,
+    )
+  })
+
+  // friend_stats has its own aggregation path (mine/recent CTEs plus an
+  // outer `where public.are_friends(...)` guarding a FROM-less scalar
+  // select) entirely separate from friend_calendar's. It deserves its own
+  // positive proof: if a future edit dropped that outer WHERE, this is the
+  // assertion that would catch total/best_ms/recent_ms still coming back
+  // for a stranger below, because without this check first there would be
+  // no evidence the friend path itself was ever exercised correctly.
+  await check('friend_stats: an accepted friend sees the aggregate', async () => {
+    const { data, error } = await a.client.rpc('friend_stats', {
+      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND,
+    })
+    assert(!error, `unexpected error ${error?.message}`)
+    assert((data ?? []).length === 1, `expected 1 row, got ${(data ?? []).length}`)
+    const row = data[0]
+    assert(row.total === 1, `expected total 1, got ${row.total}`)
+    assert(row.best_ms === friendSolveTimeMs, `expected best_ms ${friendSolveTimeMs}, got ${row.best_ms}`)
+    assert(Array.isArray(row.recent_ms), `expected recent_ms to be an array, got ${JSON.stringify(row.recent_ms)}`)
+    assert(
+      row.recent_ms[0] === friendSolveTimeMs,
+      `expected recent_ms[0] ${friendSolveTimeMs}, got ${row.recent_ms[0]}`,
+    )
+  })
+
+  // c has no friendship with b at all -- not pending, not accepted, nothing.
+  // If are_friends were removed from friend_calendar's WHERE, this returns
+  // b's one seeded day instead of an empty set, and fails.
+  await expectEmpty(
+    'friend_calendar: a stranger gets nothing',
+    c.client.rpc('friend_calendar', {
+      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND, p_since: '2000-01-01',
+    }),
+  )
+
+  // Same stranger, the other function. If the outer
+  // `where public.are_friends(...)` were dropped from friend_stats (the
+  // subtle construct called out above), this returns one row of real
+  // aggregates instead of zero rows, and fails.
+  await expectEmpty(
+    'friend_stats: a stranger gets nothing',
+    c.client.rpc('friend_stats', { p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND }),
+  )
+
+  // An anonymous caller holding only the public bundle, no session at all.
+  // auth.uid() is null inside the function, are_friends(null, b.userId) is
+  // false, so this must come back empty too -- if it didn't, anyone with the
+  // published anon key (no account required) could read any user's solves.
+  await expectEmpty(
+    'friend_calendar: an anonymous caller gets nothing',
+    anon.rpc('friend_calendar', {
+      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND, p_since: '2000-01-01',
+    }),
+  )
+
+  // A PENDING request grants nothing -- only 'accepted' counts. b -> c is
+  // requested but never accepted, so if are_friends only checked "a row
+  // exists between these two users" rather than state = 'accepted', this
+  // would leak and fail.
+  await b.client.from('friendships')
+    .insert({ requester: b.userId, addressee: c.userId, state: 'pending' })
+    .throwOnError()
+  await expectEmpty(
+    'friend_calendar: a pending request grants no access',
+    c.client.rpc('friend_calendar', {
+      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND, p_since: '2000-01-01',
+    }),
+  )
+
+  // Unfriending revokes immediately. This DESTROYS the (a, b, accepted) row
+  // that every assertion above the "positive control" pair depends on, so it
+  // must run LAST among the friend_calendar/friend_stats assertions -- any
+  // assertion needing that friendship must already have run.
+  await a.client.from('friendships').delete()
+    .eq('requester', a.userId).eq('addressee', b.userId)
+    .throwOnError()
+  await expectEmpty(
+    'friend_calendar: access stops the moment either party unfriends',
+    a.client.rpc('friend_calendar', {
+      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND, p_since: '2000-01-01',
+    }),
+  )
 } finally {
   // Removing the users cascades to their rows. Runs even on a thrown setup
   // or assertion error, so a failed run never orphans accounts. Each
@@ -845,6 +980,23 @@ try {
   // read off the result. Trusting the catch alone let two throwaway accounts,
   // their profile row and a sentinel attempt survive a real run and sit in
   // production until they were found by hand.
+  // Explicit, though the account cascade below would also remove these:
+  // cleanup only warns on failure, and a leaked sentinel session is
+  // invisible in normal use (its event id matches no real board or stats
+  // view) but still a real orphaned row.
+  if (friendSessionId) {
+    try {
+      await admin.from('solves').delete().eq('session_id', friendSessionId).throwOnError()
+    } catch (e) {
+      console.warn(`WARNING: failed to delete fixture solve (session ${friendSessionId}) — ${e.message}. Remove it manually.`)
+    }
+    try {
+      await admin.from('sessions').delete().eq('id', friendSessionId).throwOnError()
+    } catch (e) {
+      console.warn(`WARNING: failed to delete fixture session ${friendSessionId} — ${e.message}. Remove it manually.`)
+    }
+  }
+
   for (const userId of createdUserIds) {
     try {
       const { error } = await admin.auth.admin.deleteUser(userId)
