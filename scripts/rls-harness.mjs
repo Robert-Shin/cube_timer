@@ -652,10 +652,19 @@ try {
   // nowhere: if E were deleted, the update would actually SUCCEED, giving
   // expectRlsError something real to fail against.
   const d = await asUser(`rls-d-${stamp}@example.test`)
+  // A fifth account, used only as the victim in the requester-rewrite attack
+  // below. Kept entirely separate from a/b/c/d's existing entanglements
+  // (a<->b accepted, a<->c pending/redirect-tested, d used only as E's
+  // never-consummated redirect target) so the attack's central claim -- "the
+  // victim never sent or received anything and still ends up looking like a
+  // friend" -- is not accidentally true for some other reason already baked
+  // into e's history.
+  const e = await asUser(`rls-e-${stamp}@example.test`)
   await claimProfile(a)
   await claimProfile(b)
   await claimProfile(c)
   await claimProfile(d)
+  await claimProfile(e)
 
   // THE most important assertion in this feature. Without `state = 'pending'`
   // on the insert policy, this succeeds and a stranger reads a full practice
@@ -771,14 +780,17 @@ try {
       .insert({ requester: b.userId, addressee: a.userId, state: 'pending' }),
   )
 
-  // select('*') is unrestricted by column here -- unlike profiles, where a
-  // column-level grant deliberately makes select('*') FAIL so a column added
-  // later is not public by default. friendships needs no such grant because
-  // every column is meaningful to both parties and to nobody else, and the
-  // row filter is the whole boundary. This assertion pins that reasoning:
-  // '*' must succeed AND return only rows the caller is party to. If someone
-  // later adds a column that should not be shared, this is the assertion
-  // that should be made to fail, by adding a grant -- not deleted.
+  // Finding C1's fix added a column-level grant to friendships (see
+  // schema.sql), but -- unlike profiles' SELECT grant, which deliberately
+  // narrows what's readable -- its SELECT list names every column the table
+  // has today (requester, addressee, state, created_at), so select('*')
+  // still succeeds. That grant exists to close UPDATE (only `state` is
+  // writable), not to restrict SELECT: every current column is meaningful to
+  // both parties and to nobody else, and the row filter is the whole
+  // read-side boundary. This assertion pins that reasoning: '*' must succeed
+  // AND return only rows the caller is party to. If someone later adds a
+  // column that should not be shared, this is the assertion that should be
+  // made to fail, by narrowing the SELECT grant -- not deleted.
   await check('friendships: select(*) returns only rows the caller is part of', async () => {
     const { data, error } = await c.client.from('friendships').select('*')
     assert(!error, `unexpected error ${error?.message}`)
@@ -859,6 +871,66 @@ try {
       .update({ state: 'pending' })
       .eq('requester', a.userId).eq('addressee', c.userId)
       .select(),
+  )
+
+  // ---------------------------------------------------- SECURITY: Finding C1
+  // friend_accept's USING and WITH CHECK clauses (see E and F above) only
+  // ever mention `addressee`. Neither constrains `requester`, and Postgres
+  // RLS's WITH CHECK evaluates only the NEW row -- it cannot see what the row
+  // used to be. So nothing stops the addressee of a pending request from
+  // simultaneously (1) accepting it and (2) rewriting `requester` to a third
+  // party who never sent a request and was never asked. If that succeeds,
+  // are_friends(attacker, victim) becomes true and the attacker can read the
+  // victim's entire practice history via friend_calendar/friend_stats.
+  //
+  // The A -> C pending row seeded above (for the E/F isolation block) is
+  // exactly the shape this needs, with no further setup: C is the row's
+  // CURRENT addressee (USING's `auth.uid() = addressee` passes) and the row
+  // is pending (USING's `state = 'pending'` passes). The proposed new row
+  // keeps addressee = C unchanged (WITH CHECK's `auth.uid() = addressee`
+  // passes) with state = 'accepted' (WITH CHECK's other conjunct passes) --
+  // only a requester check, which does not exist anywhere in the policy,
+  // could still reject this.
+  //
+  // e stands in as the victim: e has no friendship with c in either
+  // direction (e is fresh -- see its creation above), so the proposed row
+  // (requester = e, addressee = c) collides with no primary key and no
+  // friendships_pair entry. That matters the same way it did for E and F
+  // above: if this update is (wrongly) permitted, it must actually SUCCEED
+  // -- not fail for the unrelated reason of colliding with an existing row
+  // -- so that expectRlsError is capable of going red here rather than
+  // passing vacuously.
+  await expectRlsError(
+    'friendships: SECURITY (C1) -- the addressee cannot rewrite requester to a third party while accepting',
+    c.client.from('friendships')
+      .update({ requester: e.userId, state: 'accepted' })
+      .eq('requester', a.userId).eq('addressee', c.userId)
+      .select(),
+  )
+
+  // Belt-and-suspenders on the outcome, not just the error: even if the
+  // update above were wrongly accepted (or wrongly reported success despite
+  // being filtered), the row itself must never actually name the victim.
+  // are_friends is not directly callable by clients (revoked from anon and
+  // authenticated above), so the only client-reachable surface to check the
+  // real, persisted outcome is reading the friendships row back. This reads
+  // it as the attacker (c), over every row naming c as addressee, and
+  // asserts none of them has been repointed at e -- a direct check on the
+  // data, independent of whatever error shape expectRlsError observed.
+  await check(
+    'friendships: SECURITY (C1) -- the victim was never substituted into the row',
+    async () => {
+      const { data, error } = await c.client.from('friendships')
+        .select('requester, addressee, state')
+        .eq('addressee', c.userId)
+      assert(!error, `unexpected error ${error?.message}`)
+      for (const row of data ?? []) {
+        assert(
+          row.requester !== e.userId,
+          `victim was substituted in: row is now (${row.requester}, ${row.addressee}, ${row.state})`,
+        )
+      }
+    },
   )
 
   // friendships rows need no explicit cleanup: both columns reference
