@@ -33,6 +33,14 @@
   --cal3: #4f8dd4;
   --cal4: #2a78d6;
 
+  /* Friend-profile practice calendar ramp. Validated against --panel #ffffff
+     (ordinal, single hue, monotone lightness, adjacent gaps >= 0.06, light
+     end clears the 2:1 floor). Level 0 uses --line, not a new colour. */
+  --cal-1: #86b6ef;
+  --cal-2: #3987e5;
+  --cal-3: #256abf;
+  --cal-4: #104281;
+
   /* The mark's one coloured facelet. Chrome never uses it. */
   --accent: var(--s1);
   --on-accent: #ffffff;
@@ -87,6 +95,14 @@
     --cal3: #2a72c4;
     --cal4: #3987e5;
 
+    /* Reversed order from light: on a dark surface, more activity must read
+       as MORE prominent, so it moves toward the light end of the ramp.
+       Validated against --panel #171717. */
+    --cal-1: #184f95;
+    --cal-2: #256abf;
+    --cal-3: #3987e5;
+    --cal-4: #86b6ef;
+
     --on-accent: #0d0d0d;
   }
 }
@@ -119,6 +135,14 @@
   --cal2: #1d5490;
   --cal3: #2a72c4;
   --cal4: #3987e5;
+
+  /* Reversed order from light: on a dark surface, more activity must read as
+     MORE prominent, so it moves toward the light end of the ramp. Validated
+     against --panel #171717. */
+  --cal-1: #184f95;
+  --cal-2: #256abf;
+  --cal-3: #3987e5;
+  --cal-4: #86b6ef;
 
   --on-accent: #0d0d0d;
 }
@@ -980,6 +1004,19 @@ kbd {
 .cal-scroll { overflow-x: auto; padding-bottom: 4px; }
 .cal-legend { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
 .cal-legend .note { margin: 0 4px; font-size: 11px; }
+
+/* ---- friend profile practice grid ------------------------------------- */
+/* One column per week, one cell per day. Level 0 is the neutral --line
+   floor, not a calendar-specific colour -- an empty day is chrome, not data. */
+.calendar { display: grid; grid-template-rows: repeat(7, 1fr); grid-auto-flow: column; gap: 2px; }
+.calendar .cell { width: 10px; height: 10px; border-radius: 2px; background: var(--line); }
+.calendar .cell.l1 { background: var(--cal-1); }
+.calendar .cell.l2 { background: var(--cal-2); }
+.calendar .cell.l3 { background: var(--cal-3); }
+.calendar .cell.l4 { background: var(--cal-4); }
+
+.friend-profile { display: flex; flex-direction: column; gap: var(--sp-3); max-width: 46ch; margin: 0 auto; }
+.friend-profile h2 { margin: 0; }
 
 .goal-input {
   width: 66px;

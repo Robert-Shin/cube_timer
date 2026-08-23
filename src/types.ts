@@ -91,8 +91,13 @@ export interface Solve extends Synced {
 /**
  * Effective time in ms, or null for a DNF. Penalties are stored separately
  * from timeMs so a mis-tapped +2 can be undone without losing the raw time.
+ *
+ * Typed as Pick<Solve, ...> rather than Solve: this reads only those two
+ * fields, so a caller with just a time and a penalty -- not a full row, e.g.
+ * a friend's aggregate stats -- can use it truthfully instead of fabricating
+ * the rest of Solve to satisfy the type.
  */
-export function effectiveMs(s: Solve): number | null {
+export function effectiveMs(s: Pick<Solve, 'timeMs' | 'penalty'>): number | null {
   if (s.penalty === 'dnf') return null
   return s.penalty === 'plus2' ? s.timeMs + 2000 : s.timeMs
 }
