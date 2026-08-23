@@ -1,3 +1,5 @@
+import { utcDay } from './daily'
+
 /**
  * An activity grid: one column per week, one cell per day, intensity by solve
  * count. Renders from per-day COUNTS only -- it never sees a solve.
@@ -18,10 +20,9 @@ export function FriendCalendar({
 }) {
   const byDay = new Map(days.map((d) => [d.day, d.solves]))
   const cells: { day: string; solves: number }[] = []
-  const today = new Date()
+  const now = Date.now()
   for (let i = weeks * 7 - 1; i >= 0; i--) {
-    const d = new Date(today.getTime() - i * 86_400_000)
-    const key = d.toISOString().slice(0, 10)
+    const key = utcDay(now - i * 86_400_000)
     cells.push({ day: key, solves: byDay.get(key) ?? 0 })
   }
 
