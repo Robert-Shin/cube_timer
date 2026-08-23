@@ -41,11 +41,50 @@ reconciliation and silently reverts. Deletes are **soft** — a hard delete is
 invisible to another device, which then resurrects the row. Tombstones stay in
 the store and are filtered at the UI boundary by `visible()`.
 
+## Grants are not optional, and `from public` is a trap
+
+RLS is the whole boundary here, but **policies only run if the caller could
+reach the object at all** — and Supabase's default privileges
+(`grant all ... to anon, authenticated, service_role`) hand out that reach
+explicitly, per role, the moment you create a table or function.
+
+Two consequences, both of which shipped as live holes on the phase 3 branch:
+
+- **`revoke all ... from public` locks down nothing.** `PUBLIC` is a separate
+  pseudo-role; the per-role grants survive it. Revoke by name:
+  `revoke all on function f(args) from public, anon, authenticated;` then grant
+  back only what is needed. `are_friends` stayed callable by anyone holding the
+  public anon key for exactly this reason.
+- **A policy cannot stop a column being rewritten.** RLS `with check` only sees
+  the NEW row, so it cannot express "this column did not change". Use a
+  column-level grant — `grant update (state) on public.friendships to
+  authenticated`. Without it, `grant all on tables` let the addressee of a
+  pending friend request accept it while rewriting `requester` to an arbitrary
+  victim, manufacturing a friendship that victim never consented to.
+
+`profiles` has the right pattern (`revoke all`, then column-scoped `grant
+select`). Copy it. And **verify against the live database, not by reading** —
+both holes passed code review, and one reviewer reasoned from theory that anon
+was blocked and was wrong. A probe with the public anon key takes a minute.
+
 ## Charts
 
 Validate any new chart colours before shipping them, against **both** theme
-surfaces (`--panel` is `#fffdfa` light, `#1c1a17` dark) using the dataviz
-skill's `scripts/validate_palette.js`. Don't eyeball colour-blind safety.
+surfaces (`--panel` is `#ffffff` light, `#171717` dark — read them from
+`src/index.css`, don't trust this file) using the dataviz skill's
+`scripts/validate_palette.js`. Don't eyeball colour-blind safety.
+
+That script is **not in this repo and not in `~/.claude`** — it ships bundled
+with the dataviz skill, so invoke the skill and use the base directory it
+prints. A discrete-bucket ramp like an activity grid wants `--ordinal`, not the
+default sequential mode: every bucket must clear the surface rather than being
+allowed to recede into it.
+
+Colour tokens live in **three** blocks in `src/index.css` — bare `:root`, the
+`prefers-color-scheme` media query, and `:root[data-theme='dark']`. A token
+defined in only the first two breaks the explicit light/dark toggle in one
+direction. Dark ramps are *chosen*, not flipped: on a dark surface more of a
+thing must read as more prominent, so the ramp runs toward the light end.
 
 ## Deployment
 
