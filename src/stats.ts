@@ -6,8 +6,16 @@ import { parityKey, parityLabel } from './parity'
  * WCA average of N: drop the single best and single worst, mean the rest.
  * A DNF counts as the worst; two or more DNFs make the whole average a DNF.
  * Returns null for DNF, undefined when there aren't enough solves yet.
+ *
+ * Typed as Pick<Solve, ...> rather than Solve: this only ever reads
+ * effectiveMs off each entry, so a caller holding just times and penalties --
+ * e.g. a friend's recent-solve summary, which never has a full Solve row --
+ * can call it truthfully instead of fabricating ids and timestamps.
  */
-export function averageOf(solves: Solve[], n: number): number | null | undefined {
+export function averageOf(
+  solves: Pick<Solve, 'timeMs' | 'penalty'>[],
+  n: number,
+): number | null | undefined {
   if (solves.length < n) return undefined
   const window = solves.slice(0, n)
   const times = window.map(effectiveMs)

@@ -13,6 +13,7 @@ import { visible } from './sync/merge'
 import { useSync } from './sync/engine'
 import { AuthPanel } from './AuthPanel'
 import { FriendsPanel } from './FriendsPanel'
+import { FriendProfile } from './FriendProfile'
 import { claimUsername, setOptIn, shouldClaimUsername, useProfile } from './profile'
 import { hasSubmittedToday } from './dailyClient'
 import { syncConfigured } from './supabase'
@@ -46,6 +47,7 @@ export default function App() {
   const [calendarScope, setCalendarScope] = useState<'session' | 'all'>('session')
   const [toast, setToast] = useState('')
   const [showAuth, setShowAuth] = useState(false)
+  const [openFriend, setOpenFriend] = useState<{ id: string; name: string } | null>(null)
   // Solve awaiting a parity answer; it is already recorded, so a reload
   // during the prompt keeps the time and simply leaves parity unset.
   const [pendingParity, setPendingParity] = useState<string | null>(null)
@@ -844,14 +846,18 @@ export default function App() {
           foreign key to profiles(user_id), so a user with no claimed
           username can neither befriend nor be found by anyone, and the gate
           is deliberately inescapable while active. */}
-      {sync.email && !gateActive && (
-        <FriendsPanel
-          // Task 8 wires this to open FriendProfile; a no-op for now keeps
-          // the panel functional without an unused-state build failure
-          // (noUnusedLocals) from a `<FriendProfile>` that doesn't exist yet.
-          onOpen={() => {}}
-        />
-      )}
+      {sync.email &&
+        !gateActive &&
+        (openFriend ? (
+          <FriendProfile
+            userId={openFriend.id}
+            username={openFriend.name}
+            event={session.event}
+            onClose={() => setOpenFriend(null)}
+          />
+        ) : (
+          <FriendsPanel onOpen={(id, name) => setOpenFriend({ id, name })} />
+        ))}
       {toast && <div className="toast">{toast}</div>}
     </div>
   )
