@@ -13,8 +13,10 @@ const REMOVE_FAILED = 'Could not remove that friend. Try again.'
 
 export function FriendsPanel({
   onOpen,
+  onClose,
 }: {
   onOpen: (userId: string, username: string) => void
+  onClose: () => void
 }) {
   const [data, setData] = useState<{ partitioned: Partitioned; names: Map<string, string> } | null>(null)
   const [name, setName] = useState('')
@@ -27,8 +29,8 @@ export function FriendsPanel({
   const [rowErrors, setRowErrors] = useState<Map<string, string>>(new Map())
 
   // Consulted by every await-then-setState path below, not just the initial
-  // load: this panel lives inside a closeable modal, so a close mid-request
-  // is a real path, not a hypothetical one.
+  // load: this panel is itself a closeable modal, so a close mid-request is
+  // a real path, not a hypothetical one.
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -100,68 +102,83 @@ export function FriendsPanel({
 
   const handleUnfriend = (id: string) => withRowBusy(id, () => unfriend(id), REMOVE_FAILED)
 
-  if (data === null) return <p className="note">Loading friends…</p>
+  if (data === null)
+    return (
+      <div className="modal-backdrop" onClick={onClose}>
+        <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
+          <p className="note">Loading friends…</p>
+        </div>
+      </div>
+    )
 
   const { partitioned: p, names } = data
   const label = (id: string) => names.get(id) ?? 'unknown'
 
   return (
-    <section className="friends">
-      <form onSubmit={submit}>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="username"
-          aria-label="Friend's username"
-        />
-        <button type="submit" disabled={busy || !name.trim()}>
-          Send request
-        </button>
-      </form>
-      {note && <p className="error">{note}</p>}
+    <div className="modal-backdrop" onClick={onClose}>
+      <section className="friends modal narrow" onClick={(e) => e.stopPropagation()}>
+        <div className="panel-head">
+          <h2>Friends</h2>
+          <button className="ghost small" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <form onSubmit={submit}>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="username"
+            aria-label="Friend's username"
+          />
+          <button type="submit" disabled={busy || !name.trim()}>
+            Send request
+          </button>
+        </form>
+        {note && <p className="error">{note}</p>}
 
-      {p.incoming.length > 0 && (
-        <>
-          <h3>Requests</h3>
+        {p.incoming.length > 0 && (
+          <>
+            <h3>Requests</h3>
+            <ul>
+              {p.incoming.map((id) => (
+                <li key={id}>
+                  {label(id)}
+                  <button disabled={busyIds.has(id)} onClick={() => handleRespond(id, true)}>
+                    Accept
+                  </button>
+                  <button disabled={busyIds.has(id)} onClick={() => handleRespond(id, false)}>
+                    Decline
+                  </button>
+                  {rowErrors.get(id) && <p className="error">{rowErrors.get(id)}</p>}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        <h3>Friends</h3>
+        {p.accepted.length === 0 ? (
+          <p className="empty">No friends yet. Add someone by their username.</p>
+        ) : (
           <ul>
-            {p.incoming.map((id) => (
+            {p.accepted.map((id) => (
               <li key={id}>
-                {label(id)}
-                <button disabled={busyIds.has(id)} onClick={() => handleRespond(id, true)}>
-                  Accept
+                <button className="link" onClick={() => onOpen(id, label(id))}>
+                  {label(id)}
                 </button>
-                <button disabled={busyIds.has(id)} onClick={() => handleRespond(id, false)}>
-                  Decline
+                <button disabled={busyIds.has(id)} onClick={() => handleUnfriend(id)}>
+                  Remove
                 </button>
                 {rowErrors.get(id) && <p className="error">{rowErrors.get(id)}</p>}
               </li>
             ))}
           </ul>
-        </>
-      )}
+        )}
 
-      <h3>Friends</h3>
-      {p.accepted.length === 0 ? (
-        <p className="empty">No friends yet. Add someone by their username.</p>
-      ) : (
-        <ul>
-          {p.accepted.map((id) => (
-            <li key={id}>
-              <button className="link" onClick={() => onOpen(id, label(id))}>
-                {label(id)}
-              </button>
-              <button disabled={busyIds.has(id)} onClick={() => handleUnfriend(id)}>
-                Remove
-              </button>
-              {rowErrors.get(id) && <p className="error">{rowErrors.get(id)}</p>}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {p.outgoing.length > 0 && (
-        <p className="note">Waiting on: {p.outgoing.map(label).join(', ')}</p>
-      )}
-    </section>
+        {p.outgoing.length > 0 && (
+          <p className="note">Waiting on: {p.outgoing.map(label).join(', ')}</p>
+        )}
+      </section>
+    </div>
   )
 }

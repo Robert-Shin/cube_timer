@@ -47,6 +47,7 @@ export default function App() {
   const [calendarScope, setCalendarScope] = useState<'session' | 'all'>('session')
   const [toast, setToast] = useState('')
   const [showAuth, setShowAuth] = useState(false)
+  const [showFriends, setShowFriends] = useState(false)
   const [openFriend, setOpenFriend] = useState<{ id: string; name: string } | null>(null)
   // Solve awaiting a parity answer; it is already recorded, so a reload
   // during the prompt keeps the time and simply leaves parity unset.
@@ -98,7 +99,13 @@ export default function App() {
     profile,
   })
   useEffect(() => {
-    if (gateActive) setShowAuth(true)
+    if (gateActive) {
+      setShowAuth(true)
+      // Otherwise a friends panel left open before the gate reappeared (e.g.
+      // switching accounts) would silently pop back up the moment the gate
+      // clears, with no button press behind it.
+      setShowFriends(false)
+    }
   }, [gateActive])
 
   // Whether opting in/out would actually change today's board. null means
@@ -246,6 +253,7 @@ export default function App() {
     detailId !== null ||
     showSettings ||
     showAuth ||
+    showFriends ||
     pendingParity !== null
   const { state, display } = useTimer(record, tab === 'timer' && !typing && !modalOpen)
 
@@ -345,6 +353,16 @@ export default function App() {
                 ) : (
                   'Sign in'
                 )}
+              </button>
+            )}
+            {/* Same signed-in-and-past-the-gate predicate that decides whether
+                FriendsPanel/FriendProfile may render below -- see the comment
+                there. Reusing it here, rather than inventing a second "may
+                use friends" check, keeps the button and the gate from ever
+                disagreeing. */}
+            {sync.email && !gateActive && (
+              <button className="ghost" onClick={() => setShowFriends(true)}>
+                Friends
               </button>
             )}
             <button ref={settingsBtn} className="ghost" onClick={() => setShowSettings((v) => !v)}>
@@ -845,8 +863,11 @@ export default function App() {
           plus a check that the claim gate isn't showing: friendships have a
           foreign key to profiles(user_id), so a user with no claimed
           username can neither befriend nor be found by anyone, and the gate
-          is deliberately inescapable while active. */}
-      {sync.email &&
+          is deliberately inescapable while active. Also gated on showFriends,
+          the same way AuthPanel is gated on showAuth -- a way in (the header
+          button above) and a way out (each panel's Close/Back). */}
+      {showFriends &&
+        sync.email &&
         !gateActive &&
         (openFriend ? (
           <FriendProfile
@@ -856,7 +877,13 @@ export default function App() {
             onClose={() => setOpenFriend(null)}
           />
         ) : (
-          <FriendsPanel onOpen={(id, name) => setOpenFriend({ id, name })} />
+          <FriendsPanel
+            onOpen={(id, name) => setOpenFriend({ id, name })}
+            onClose={() => {
+              setShowFriends(false)
+              setOpenFriend(null)
+            }}
+          />
         ))}
       {toast && <div className="toast">{toast}</div>}
     </div>
