@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { utcDay } from './daily'
 import {
   currentStreak,
   friendDaily,
@@ -145,7 +146,7 @@ export function FriendProfile({
                   <td>{view.total}</td>
                 </tr>
                 {(() => {
-                  const streak = currentStreak(view.days, new Date().toISOString().slice(0, 10))
+                  const streak = currentStreak(view.days, utcDay(Date.now()))
                   return (
                     <tr>
                       <th>streak</th>

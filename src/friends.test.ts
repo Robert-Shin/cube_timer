@@ -97,8 +97,11 @@ describe('currentStreak', () => {
     expect(currentStreak([{ day: TODAY, solves: 1 }], TODAY)).toBe(1)
   })
 
-  it('counts today alone as 1 even when yesterday was empty', () => {
-    const days = [{ day: TODAY, solves: 1 }]
+  it('counts today alone as 1 even when yesterday has an explicit zero-solve row', () => {
+    const days = [
+      { day: TODAY, solves: 1 },
+      { day: YDAY, solves: 0 },
+    ]
     expect(currentStreak(days, TODAY)).toBe(1)
   })
 
@@ -109,6 +112,33 @@ describe('currentStreak', () => {
       { day: DAY_BEFORE, solves: 5 },
     ]
     expect(currentStreak(days, TODAY)).toBe(2)
+  })
+
+  it('crosses a year boundary without losing the streak', () => {
+    const days = [
+      { day: '2026-01-01', solves: 1 },
+      { day: '2025-12-31', solves: 2 },
+      { day: '2025-12-30', solves: 3 },
+    ]
+    expect(currentStreak(days, '2026-01-01')).toBe(3)
+  })
+
+  it('crosses a month boundary without losing the streak', () => {
+    const days = [
+      { day: '2026-09-01', solves: 1 },
+      { day: '2026-08-31', solves: 2 },
+      { day: '2026-08-30', solves: 3 },
+    ]
+    expect(currentStreak(days, '2026-09-01')).toBe(3)
+  })
+
+  it('crosses a leap day without losing the streak', () => {
+    const days = [
+      { day: '2028-03-01', solves: 1 },
+      { day: '2028-02-29', solves: 2 },
+      { day: '2028-02-28', solves: 3 },
+    ]
+    expect(currentStreak(days, '2028-03-01')).toBe(3)
   })
 })
 
