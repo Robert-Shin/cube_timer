@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { friendProfile, type FriendProfileView } from './friends'
-import { PracticeCalendar } from './PracticeCalendar'
+import { FriendCalendar } from './FriendCalendar'
 import { formatMs } from './format'
 import { averageOf } from './stats'
 import type { EventId, Solve } from './types'
@@ -21,25 +21,38 @@ export function FriendProfile({
   // null = loading, 'error' = the call genuinely failed, an object = success
   // (possibly with total: 0, which is a normal empty state, not an error).
   const [view, setView] = useState<FriendProfileView | null | 'error'>(null)
+  // Bumped by the retry button to force the effect below to run again for
+  // the same userId/event.
+  const [attempt, setAttempt] = useState(0)
 
-  // Consulted after the fetch below. Reset at the start of every run of this
-  // effect, not just once on mount: switching friends or events while a
-  // fetch is in flight must not let the stale response land on the new
-  // selection, and unmounting mid-fetch must not write state at all.
-  const mounted = useRef(true)
+  // `stale` is local to each run of this effect, not a ref shared across
+  // runs: switching friends or events while a fetch is in flight starts a
+  // new run with its own `stale` binding, so the OLD run's cleanup flips
+  // only the OLD run's flag. When the old run's fetch resolves afterwards,
+  // its own `stale` is true and the response is dropped -- only the newest
+  // request's response can ever land. Unmounting mid-fetch runs the same
+  // cleanup, so no state is written after unmount either.
   useEffect(() => {
-    mounted.current = true
+    let stale = false
     setView(null)
     friendProfile(userId, event, WEEKS * 7).then((v) => {
-      if (mounted.current) setView(v ?? 'error')
+      if (!stale) setView(v ?? 'error')
     })
     return () => {
-      mounted.current = false
+      stale = true
     }
-  }, [userId, event])
+  }, [userId, event, attempt])
 
   if (view === null) return <p className="note">Loading {username}…</p>
-  if (view === 'error') return <p className="error">Could not load {username}&apos;s practice. Try again.</p>
+  if (view === 'error')
+    return (
+      <p className="error">
+        Could not load {username}&apos;s practice.{' '}
+        <button className="link" onClick={() => setAttempt((n) => n + 1)}>
+          Try again.
+        </button>
+      </p>
+    )
 
   // The friend's ao12 is computed by the SAME function that computes yours, so
   // the two can never disagree. averageOf only reads timeMs/penalty, so the
@@ -67,7 +80,7 @@ export function FriendProfile({
       {view.total === 0 ? (
         <p className="empty">No solves for this event yet.</p>
       ) : (
-        <PracticeCalendar days={view.days} weeks={WEEKS} />
+        <FriendCalendar days={view.days} weeks={WEEKS} />
       )}
     </section>
   )
