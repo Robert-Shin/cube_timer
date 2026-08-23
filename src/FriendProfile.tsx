@@ -1,9 +1,15 @@
 import { useEffect, useState } from 'react'
-import { friendProfile, type FriendProfileView } from './friends'
+import {
+  currentStreak,
+  friendDaily,
+  friendProfile,
+  type FriendDailyView,
+  type FriendProfileView,
+} from './friends'
 import { FriendCalendar } from './FriendCalendar'
 import { formatMs } from './format'
 import { averageOf } from './stats'
-import type { EventId, Solve } from './types'
+import { EVENTS, type EventId, type Solve } from './types'
 
 const WEEKS = 12
 
@@ -11,17 +17,25 @@ export function FriendProfile({
   userId,
   username,
   event,
+  onEventChange,
   onClose,
 }: {
   userId: string
   username: string
   event: EventId
+  onEventChange: (event: EventId) => void
   onClose: () => void
 }) {
   // null = loading, 'error' = the call genuinely failed, an object = success
   // (possibly with total: 0, which is a normal empty state, not an error).
   const [view, setView] = useState<FriendProfileView | null | 'error'>(null)
-  // Bumped by the retry button to force the effect below to run again for
+  // Same three states as `view`, but for today's daily-challenge result --
+  // kept separate so a failure in one call never blanks or masks the other.
+  // 'none' is success-with-no-data (not friends, no attempt, or revealed but
+  // never submitted -- friendDaily's docstring covers why those collapse
+  // into one calm state rather than an error).
+  const [daily, setDaily] = useState<FriendDailyView | 'none' | null | 'error'>(null)
+  // Bumped by the retry button to force the effects below to run again for
   // the same userId/event.
   const [attempt, setAttempt] = useState(0)
 
@@ -43,35 +57,30 @@ export function FriendProfile({
     }
   }, [userId, event, attempt])
 
-  if (view === null)
-    return (
-      <div className="modal-backdrop" onClick={onClose}>
-        <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
-          <p className="note">Loading {username}…</p>
-        </div>
-      </div>
-    )
-  if (view === 'error')
-    return (
-      <div className="modal-backdrop" onClick={onClose}>
-        <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
-          <p className="error">
-            Could not load {username}&apos;s practice.{' '}
-            <button className="link" onClick={() => setAttempt((n) => n + 1)}>
-              Try again.
-            </button>
-          </p>
-        </div>
-      </div>
-    )
+  // Separate effect, same staleness pattern: this call is independent of the
+  // one above, so switching event/friend/retry must not let a slow response
+  // from one land after a newer request for the other has already started.
+  useEffect(() => {
+    let stale = false
+    setDaily(null)
+    friendDaily(userId, event).then((v) => {
+      if (!stale) setDaily(v === null ? 'error' : v)
+    })
+    return () => {
+      stale = true
+    }
+  }, [userId, event, attempt])
 
   // The friend's ao12 is computed by the SAME function that computes yours, so
   // the two can never disagree. averageOf only reads timeMs/penalty, so the
   // bare integers are wrapped in exactly that shape -- not a fabricated Solve.
-  const asSolves: Pick<Solve, 'timeMs' | 'penalty'>[] = view.recentMs.map((ms) => ({
-    timeMs: ms ?? 0,
-    penalty: ms === null ? 'dnf' : 'none',
-  }))
+  const asSolves: Pick<Solve, 'timeMs' | 'penalty'>[] =
+    view === null || view === 'error'
+      ? []
+      : view.recentMs.map((ms) => ({
+          timeMs: ms ?? 0,
+          penalty: ms === null ? 'dnf' : ('none' as const),
+        }))
   const ao12 = averageOf(asSolves, 12)
 
   return (
@@ -84,27 +93,96 @@ export function FriendProfile({
           </button>
         </div>
 
-        <table className="figures secondary">
-          <tbody>
-            <tr>
-              <th>best</th>
-              <td>{view.bestMs === null ? '—' : formatMs(view.bestMs)}</td>
-            </tr>
-            <tr>
-              <th>ao12</th>
-              <td>{typeof ao12 === 'number' ? formatMs(ao12) : ao12 === null ? 'DNF' : '—'}</td>
-            </tr>
-            <tr>
-              <th>solves</th>
-              <td>{view.total}</td>
-            </tr>
-          </tbody>
-        </table>
+        {/* Defaults to the viewer's own session event (via the `event` prop),
+            then is freely changeable -- otherwise a friend's 4x4 can only be
+            seen while the viewer is themselves on 4x4. Reuses the same
+            EVENTS list SessionManager/ImportDialog use for their event
+            pickers, so this never drifts from what the rest of the app
+            considers a choosable event. */}
+        <label className="ctrl">
+          Event
+          <select
+            value={event}
+            onChange={(e) => onEventChange(e.target.value as EventId)}
+            aria-label="Friend's event"
+          >
+            {EVENTS.map((ev) => (
+              <option key={ev.id} value={ev.id}>
+                {ev.name}
+              </option>
+            ))}
+          </select>
+        </label>
 
-        {view.total === 0 ? (
-          <p className="empty">No solves for this event yet.</p>
+        {view === null ? (
+          <p className="note">Loading {username}…</p>
+        ) : view === 'error' ? (
+          <p className="error">
+            Could not load {username}&apos;s practice.{' '}
+            <button className="link" onClick={() => setAttempt((n) => n + 1)}>
+              Try again.
+            </button>
+          </p>
         ) : (
-          <FriendCalendar days={view.days} weeks={WEEKS} />
+          <>
+            {/* Today's UTC date, matching how friend_calendar/friend_stats
+                bucket days and how FriendCalendar computes "today" for its
+                own grid -- all three must agree on the same calendar day or
+                the streak and the grid it is drawn from would disagree at
+                the boundary. */}
+            <table className="figures secondary">
+              <tbody>
+                <tr>
+                  <th>best</th>
+                  <td>{view.bestMs === null ? '—' : formatMs(view.bestMs)}</td>
+                </tr>
+                <tr>
+                  <th>ao12</th>
+                  <td>{typeof ao12 === 'number' ? formatMs(ao12) : ao12 === null ? 'DNF' : '—'}</td>
+                </tr>
+                <tr>
+                  <th>solves</th>
+                  <td>{view.total}</td>
+                </tr>
+                {(() => {
+                  const streak = currentStreak(view.days, new Date().toISOString().slice(0, 10))
+                  return (
+                    <tr>
+                      <th>streak</th>
+                      <td>
+                        {streak} day{streak === 1 ? '' : 's'}
+                      </td>
+                    </tr>
+                  )
+                })()}
+              </tbody>
+            </table>
+
+            <div className="friend-daily">
+              {daily === null ? (
+                <p className="note">Loading today&apos;s result…</p>
+              ) : daily === 'error' ? (
+                <p className="error">
+                  Could not load today&apos;s result.{' '}
+                  <button className="link" onClick={() => setAttempt((n) => n + 1)}>
+                    Try again.
+                  </button>
+                </p>
+              ) : daily === 'none' ? (
+                <p className="empty">No result for today&apos;s challenge yet.</p>
+              ) : (
+                <p className="note">
+                  Today: <strong>{daily.timeMs === null ? 'DNF' : formatMs(daily.timeMs)}</strong>
+                </p>
+              )}
+            </div>
+
+            {view.total === 0 ? (
+              <p className="empty">No solves for this event yet.</p>
+            ) : (
+              <FriendCalendar days={view.days} weeks={WEEKS} />
+            )}
+          </>
         )}
       </section>
     </div>

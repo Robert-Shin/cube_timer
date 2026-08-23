@@ -49,6 +49,12 @@ export default function App() {
   const [showAuth, setShowAuth] = useState(false)
   const [showFriends, setShowFriends] = useState(false)
   const [openFriend, setOpenFriend] = useState<{ id: string; name: string } | null>(null)
+  // The event FriendProfile is showing, independent of the viewer's own
+  // session event. null means "use the viewer's current session event" --
+  // the default -- so this only needs setting once the viewer actually
+  // picks something different, and resets to that default (not to whatever
+  // was last picked) every time a new friend is opened.
+  const [friendEvent, setFriendEvent] = useState<EventId | null>(null)
   // Solve awaiting a parity answer; it is already recorded, so a reload
   // during the prompt keeps the time and simply leaves parity unset.
   const [pendingParity, setPendingParity] = useState<string | null>(null)
@@ -873,15 +879,23 @@ export default function App() {
           <FriendProfile
             userId={openFriend.id}
             username={openFriend.name}
-            event={session.event}
-            onClose={() => setOpenFriend(null)}
+            event={friendEvent ?? session.event}
+            onEventChange={setFriendEvent}
+            onClose={() => {
+              setOpenFriend(null)
+              setFriendEvent(null)
+            }}
           />
         ) : (
           <FriendsPanel
-            onOpen={(id, name) => setOpenFriend({ id, name })}
+            onOpen={(id, name) => {
+              setFriendEvent(null)
+              setOpenFriend({ id, name })
+            }}
             onClose={() => {
               setShowFriends(false)
               setOpenFriend(null)
+              setFriendEvent(null)
             }}
           />
         ))}

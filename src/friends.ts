@@ -60,6 +60,43 @@ export interface FriendProfileView {
   recentMs: (number | null)[]
 }
 
+/**
+ * Consecutive days with at least one solve, counting back from `today`.
+ *
+ * `today` is not required to have a solve yet: the day is still in progress,
+ * so an empty today does not zero the streak the moment the UTC date rolls
+ * over. Instead, when today is empty the count starts from yesterday --
+ * if yesterday was active, the streak is reported as still alive (pending
+ * today's first solve); if yesterday was also empty, the streak is
+ * genuinely 0. Once the walk starts, it stops at the first missing day,
+ * counting only unbroken consecutive days from that point.
+ *
+ * Pure and given `today` explicitly (rather than reading Date.now() itself)
+ * so it stays trivially testable -- same shape as bestOfDay/utcDay in
+ * daily.ts, which take the day as data instead of a clock.
+ */
+export function currentStreak(
+  days: { day: string; solves: number }[],
+  today: string,
+): number {
+  const active = new Set(days.filter((d) => d.solves > 0).map((d) => d.day))
+
+  let cursor = active.has(today) ? today : addUtcDays(today, -1)
+  let count = 0
+  while (active.has(cursor)) {
+    count++
+    cursor = addUtcDays(cursor, -1)
+  }
+  return count
+}
+
+/** Shifts a 'YYYY-MM-DD' string by `n` UTC days, wrapping months/years correctly. */
+function addUtcDays(day: string, n: number): string {
+  const d = new Date(`${day}T00:00:00.000Z`)
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+
 /** Resolves a username to a user id, then inserts a pending request. */
 export async function sendRequest(username: string) {
   if (!supabase) return 'retry' as const
@@ -198,6 +235,48 @@ export async function friendProfile(
     // decision by the server. Promise.all rejects as soon as either RPC's
     // fetch fails, e.g. offline/DNS/TLS -- distinct from `cal.error` /
     // `stats.error`, which is the server responding with a decision.
+    return null
+  }
+}
+
+export interface FriendDailyView {
+  /** null means a DNF, matching BoardRow.challengeMs in dailyClient.ts. */
+  timeMs: number | null
+}
+
+/**
+ * Today's SUBMITTED daily-challenge attempt for a friend, via friend_daily
+ * (see the end of supabase/schema.sql). Deliberately ignores
+ * `published`/`opted_in`: an accepted friend sees the result even when the
+ * friend opted out of the public board -- that gate is `are_friends`, not
+ * the board's opt-in.
+ *
+ * Three distinct outcomes, on purpose -- this codebase has already been bitten
+ * once by conflating "no data" with "the call failed" (see
+ * publishBestOfDay's canRetract comment in dailyClient.ts):
+ * - null    -- the call itself failed (not configured, RPC error, or a
+ *              thrown rejection). An error state, never rendered as empty.
+ * - 'none'  -- the call succeeded and there is genuinely no result: not
+ *              friends, no attempt today, or revealed-but-never-submitted.
+ *              friend_daily conflates those on the server (all return zero
+ *              rows), and none of them lets the client say anything more
+ *              specific anyway, so 'none' covers all three truthfully.
+ * - a view  -- the call succeeded with a submitted result.
+ */
+export async function friendDaily(
+  userId: string,
+  event: EventId,
+): Promise<FriendDailyView | 'none' | null> {
+  if (!supabase) return null
+  try {
+    const { data, error } = await supabase.rpc('friend_daily', { p_user: userId, p_event: event })
+    if (error) return null
+    const row = data?.[0]
+    if (!row) return 'none'
+    return { timeMs: row.penalty === 'dnf' ? null : row.time_ms }
+  } catch {
+    // A thrown rejection is the fetch layer failing outright -- never a
+    // decision by the server.
     return null
   }
 }
