@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { classifyRequestError, partitionFriendships } from './friends'
+import { classifyRequestError, currentStreak, partitionFriendships } from './friends'
 
 const ME = 'me-uuid'
 
@@ -53,6 +53,62 @@ describe('partitionFriendships', () => {
     expect(partitionFriendships([], ME)).toEqual({
       accepted: [], incoming: [], outgoing: [],
     })
+  })
+})
+
+describe('currentStreak', () => {
+  const TODAY = '2026-08-22'
+  const YDAY = '2026-08-21'
+  const DAY_BEFORE = '2026-08-20'
+  const THREE_AGO = '2026-08-19'
+
+  it('is 0 for an empty history', () => {
+    expect(currentStreak([], TODAY)).toBe(0)
+  })
+
+  it('is 0 when the streak was already broken yesterday', () => {
+    // Active three days ago, but a gap at both yesterday and today: the
+    // streak is over, not just "not extended yet".
+    const days = [{ day: THREE_AGO, solves: 2 }]
+    expect(currentStreak(days, TODAY)).toBe(0)
+  })
+
+  it('counts a streak that runs all the way to today', () => {
+    const days = [
+      { day: TODAY, solves: 3 },
+      { day: YDAY, solves: 1 },
+      { day: DAY_BEFORE, solves: 5 },
+    ]
+    expect(currentStreak(days, TODAY)).toBe(3)
+  })
+
+  it('does not zero out a streak just because today has no solves yet', () => {
+    // Today is not over. Yesterday (and before) were active, so the streak
+    // is still alive pending today's solves -- reporting 0 here would be a
+    // false "you broke your streak" the moment the clock rolls over UTC.
+    const days = [
+      { day: YDAY, solves: 4 },
+      { day: DAY_BEFORE, solves: 2 },
+    ]
+    expect(currentStreak(days, TODAY)).toBe(2)
+  })
+
+  it('counts a single active day as a streak of 1', () => {
+    expect(currentStreak([{ day: TODAY, solves: 1 }], TODAY)).toBe(1)
+  })
+
+  it('counts today alone as 1 even when yesterday was empty', () => {
+    const days = [{ day: TODAY, solves: 1 }]
+    expect(currentStreak(days, TODAY)).toBe(1)
+  })
+
+  it('ignores a zero-solve day row the same as a missing one', () => {
+    const days = [
+      { day: TODAY, solves: 0 },
+      { day: YDAY, solves: 5 },
+      { day: DAY_BEFORE, solves: 5 },
+    ]
+    expect(currentStreak(days, TODAY)).toBe(2)
   })
 })
 
