@@ -566,7 +566,38 @@ language sql stable security definer set search_path = public as $$
   where public.are_friends(auth.uid(), p_user);
 $$;
 
+-- A friend profile shows today's daily-challenge result. This CANNOT reuse
+-- attempts_select_board: that policy requires `published`, and `published`
+-- is set from profiles.opted_in at submit time -- opting in to the PUBLIC
+-- BOARD. The spec's Decisions section draws these apart on purpose:
+-- opted_in means "put me on the public board"; accepting a friend request
+-- means "you may see my practice", and the two never interact. So this
+-- function deliberately IGNORES `published`/`opted_in` entirely and gates
+-- only on `are_friends` -- an accepted friend sees today's result even when
+-- that friend never opted in to the board and nobody else can see it. This
+-- WILL look like a bug to anyone who knows the board path (attempts_select_
+-- board's published check). It is not: don't "fix" it by adding a
+-- published/opted_in condition here.
+--
+-- Unlike friend_stats, this selects from a real FROM clause (daily_attempts),
+-- not a FROM-less scalar select list -- so a WHERE that excludes every row
+-- (wrong user, wrong day, not submitted, not a friend) yields zero rows on
+-- its own; there is no "one row of nulls" trap to guard against separately.
+create or replace function public.friend_daily(p_user uuid, p_event text)
+returns table (time_ms integer, penalty text)
+language sql stable security definer set search_path = public as $$
+  select a.time_ms, a.penalty
+  from public.daily_attempts a
+  where a.user_id = p_user
+    and a.event = p_event
+    and a.utc_day = (now() at time zone 'utc')::date
+    and a.submitted_at is not null
+    and public.are_friends(auth.uid(), p_user);
+$$;
+
 revoke all on function public.friend_calendar(uuid, text, date) from public, anon, authenticated;
 revoke all on function public.friend_stats(uuid, text) from public, anon, authenticated;
+revoke all on function public.friend_daily(uuid, text) from public, anon, authenticated;
 grant execute on function public.friend_calendar(uuid, text, date) to authenticated;
 grant execute on function public.friend_stats(uuid, text) to authenticated;
+grant execute on function public.friend_daily(uuid, text) to authenticated;
