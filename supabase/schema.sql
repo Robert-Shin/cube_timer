@@ -421,7 +421,16 @@ $$;
 -- call it directly could pass two arbitrary uuids it has no relationship
 -- to and learn whether those two strangers are friends, which is not
 -- something any client needs to do.
-revoke all on function public.are_friends(uuid, uuid) from public;
+--
+-- `revoke ... from public` alone does NOT remove this: Supabase's default
+-- privileges (`alter default privileges in schema public grant all on
+-- functions to anon, authenticated, service_role`) grant execute to `anon`
+-- and `authenticated` explicitly, per-role, at creation time. PUBLIC is a
+-- separate pseudo-role; revoking from it leaves those explicit per-role
+-- grants standing, so the function stays callable by anon regardless. Every
+-- role that received an implicit default-privilege grant must be revoked by
+-- name.
+revoke all on function public.are_friends(uuid, uuid) from public, anon, authenticated;
 
 alter table public.friendships enable row level security;
 
@@ -521,7 +530,7 @@ language sql stable security definer set search_path = public as $$
   where public.are_friends(auth.uid(), p_user);
 $$;
 
-revoke all on function public.friend_calendar(uuid, text, date) from public;
-revoke all on function public.friend_stats(uuid, text) from public;
+revoke all on function public.friend_calendar(uuid, text, date) from public, anon, authenticated;
+revoke all on function public.friend_stats(uuid, text) from public, anon, authenticated;
 grant execute on function public.friend_calendar(uuid, text, date) to authenticated;
 grant execute on function public.friend_stats(uuid, text) to authenticated;

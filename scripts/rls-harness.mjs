@@ -191,6 +191,33 @@ async function expectRlsError(label, query) {
   })
 }
 
+// A revoked-EXECUTE rejection looks different from an RLS rejection: Postgres
+// refuses to even start the function, so there is no query to filter down to
+// zero rows -- the client gets a bare 42501 "permission denied for function
+// ...". expectEmpty cannot distinguish that from "the function ran and
+// correctly decided to return nothing", which is exactly how the original
+// finding here went undetected: are_friends(null, p_user) is false for an
+// unauthenticated caller, so friend_calendar/friend_stats already returned
+// an empty array to anon even while anon could freely EXECUTE them -- an
+// empty result that had nothing to do with the grant. Only a query that
+// demands an error, and demands it be specifically permission-denied, proves
+// EXECUTE was actually revoked.
+async function expectPermissionDenied(label, query) {
+  await check(label, async () => {
+    const { data, error } = await query
+    assert(
+      !!error,
+      `expected a permission-denied error, but the call succeeded with ${(data ?? []).length} row(s) -- EXECUTE was not actually revoked`,
+    )
+    const isPermissionDenied =
+      error.code === '42501' || /permission denied for function/i.test(error.message ?? '')
+    assert(
+      isPermissionDenied,
+      `expected a permission-denied error (42501: permission denied for function), got ${error.code}: ${error.message}`,
+    )
+  })
+}
+
 async function expectOneRow(label, query) {
   await check(label, async () => {
     const { data, error } = await query
@@ -931,14 +958,49 @@ try {
   )
 
   // An anonymous caller holding only the public bundle, no session at all.
-  // auth.uid() is null inside the function, are_friends(null, b.userId) is
-  // false, so this must come back empty too -- if it didn't, anyone with the
-  // published anon key (no account required) could read any user's solves.
-  await expectEmpty(
-    'friend_calendar: an anonymous caller gets nothing',
+  // This used to be an expectEmpty on the grounds that auth.uid() is null
+  // inside the function, so are_friends(null, b.userId) is false and the
+  // body returns zero rows -- which is true, but beside the point: that
+  // reasoning assumes anon can reach the function body at all. It could.
+  // Supabase's default privileges (`alter default privileges in schema
+  // public grant all on functions to anon, authenticated, service_role`)
+  // grant EXECUTE to anon explicitly, per-role, at creation time, and
+  // `revoke ... from public` -- the only revoke schema.sql issued -- does
+  // not touch an explicit per-role grant. So anon could call
+  // friend_calendar/friend_stats freely, and could call are_friends
+  // directly with any two arbitrary uuids to learn whether two strangers
+  // are friends, all while this assertion stayed green because "empty
+  // result" was all it ever demanded. Retargeted (same calls, replacing
+  // expectEmpty with expectPermissionDenied) to require the actual fix: a
+  // bare 42501 rather than a result of any shape, empty or not. This is the
+  // assertion that would have caught the live finding.
+  await expectPermissionDenied(
+    'friend_calendar: anon cannot execute the function at all (permission denied, not a filtered-empty result)',
     anon.rpc('friend_calendar', {
       p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND, p_since: '2000-01-01',
     }),
+  )
+  await expectPermissionDenied(
+    'friend_stats: anon cannot execute the function at all (permission denied, not a filtered-empty result)',
+    anon.rpc('friend_stats', { p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND }),
+  )
+
+  // are_friends is the relationship-oracle helper itself: called directly
+  // with two arbitrary uuids (no shared session, no relationship to either
+  // party required), it answers "are these two people friends" with no
+  // filtering of its own -- that boundary is enforced entirely by nobody
+  // being able to call it except the two security-definer functions running
+  // as its owner. Revoked from anon AND authenticated (unlike
+  // friend_calendar/friend_stats, which authenticated may call); both must
+  // be checked, since a fix that only revoked from anon would leave a signed
+  // in user free to probe arbitrary pairs.
+  await expectPermissionDenied(
+    'are_friends: anon cannot execute the relationship-oracle helper directly',
+    anon.rpc('are_friends', { a: a.userId, b: b.userId }),
+  )
+  await expectPermissionDenied(
+    'are_friends: an authenticated (but unrelated) caller cannot execute it directly either',
+    c.client.rpc('are_friends', { a: a.userId, b: b.userId }),
   )
 
   // A PENDING request grants nothing -- only 'accepted' counts. b -> c is
