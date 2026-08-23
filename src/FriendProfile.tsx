@@ -43,15 +43,26 @@ export function FriendProfile({
     }
   }, [userId, event, attempt])
 
-  if (view === null) return <p className="note">Loading {username}…</p>
+  if (view === null)
+    return (
+      <div className="modal-backdrop" onClick={onClose}>
+        <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
+          <p className="note">Loading {username}…</p>
+        </div>
+      </div>
+    )
   if (view === 'error')
     return (
-      <p className="error">
-        Could not load {username}&apos;s practice.{' '}
-        <button className="link" onClick={() => setAttempt((n) => n + 1)}>
-          Try again.
-        </button>
-      </p>
+      <div className="modal-backdrop" onClick={onClose}>
+        <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
+          <p className="error">
+            Could not load {username}&apos;s practice.{' '}
+            <button className="link" onClick={() => setAttempt((n) => n + 1)}>
+              Try again.
+            </button>
+          </p>
+        </div>
+      </div>
     )
 
   // The friend's ao12 is computed by the SAME function that computes yours, so
@@ -64,24 +75,38 @@ export function FriendProfile({
   const ao12 = averageOf(asSolves, 12)
 
   return (
-    <section className="friend-profile">
-      <h2>{username}</h2>
-      <button onClick={onClose}>Back</button>
+    <div className="modal-backdrop" onClick={onClose}>
+      <section className="friend-profile modal" onClick={(e) => e.stopPropagation()}>
+        <div className="panel-head">
+          <h2>{username}</h2>
+          <button className="ghost small" onClick={onClose}>
+            Back
+          </button>
+        </div>
 
-      <dl className="figures">
-        <dt>best</dt>
-        <dd>{view.bestMs === null ? '—' : formatMs(view.bestMs)}</dd>
-        <dt>ao12</dt>
-        <dd>{typeof ao12 === 'number' ? formatMs(ao12) : ao12 === null ? 'DNF' : '—'}</dd>
-        <dt>solves</dt>
-        <dd>{view.total}</dd>
-      </dl>
+        <table className="figures secondary">
+          <tbody>
+            <tr>
+              <th>best</th>
+              <td>{view.bestMs === null ? '—' : formatMs(view.bestMs)}</td>
+            </tr>
+            <tr>
+              <th>ao12</th>
+              <td>{typeof ao12 === 'number' ? formatMs(ao12) : ao12 === null ? 'DNF' : '—'}</td>
+            </tr>
+            <tr>
+              <th>solves</th>
+              <td>{view.total}</td>
+            </tr>
+          </tbody>
+        </table>
 
-      {view.total === 0 ? (
-        <p className="empty">No solves for this event yet.</p>
-      ) : (
-        <FriendCalendar days={view.days} weeks={WEEKS} />
-      )}
-    </section>
+        {view.total === 0 ? (
+          <p className="empty">No solves for this event yet.</p>
+        ) : (
+          <FriendCalendar days={view.days} weeks={WEEKS} />
+        )}
+      </section>
+    </div>
   )
 }

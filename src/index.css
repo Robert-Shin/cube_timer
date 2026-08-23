@@ -234,6 +234,22 @@ button.ghost { background: none; color: var(--dim); }
 button.ghost:hover { color: var(--text); background: var(--raised); }
 button.small { padding: 2px 8px; font-size: var(--t-xs); }
 
+/* A button that reads as text, for when the action sits inline in a sentence
+   or as the primary label of a list row -- no button chrome, but still a
+   real button, so it keeps a visible focus state. */
+button.link {
+  display: inline;
+  background: none;
+  border: none;
+  border-radius: 2px;
+  padding: 0;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+button.link:hover { background: none; color: var(--text); }
+button.link:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
 .scramble {
   flex-shrink: 0;
   margin: clamp(8px, 2.5vh, 28px) auto 0;
@@ -832,6 +848,38 @@ button.danger:hover { background: color-mix(in oklab, var(--danger) 14%, var(--p
 /* ---- solve detail ---------------------------------------------------- */
 .modal.narrow { width: min(440px, 100%); }
 .modal.wide { width: min(720px, 100%); }
+
+/* ---- friends ----------------------------------------------------------- */
+.friends { display: flex; flex-direction: column; gap: var(--sp-3); }
+.friends form { display: flex; gap: var(--sp-2); }
+.friends form input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  padding: 5px 9px;
+}
+.friends form input:focus { outline: none; border-color: var(--text); }
+.friends h3 { margin: 0; font-size: var(--t-xs); font-weight: 400; color: var(--dim); }
+.friends ul { list-style: none; margin: 0; padding: 0; }
+.friends li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+}
+.friends li:last-child { border-bottom: none; }
+/* The friend's name is the row's primary label; every other control trails
+   it on the right. */
+.friends li button.link { margin-right: auto; }
+.friends .error { margin: 0; }
+
+.friend-profile { display: flex; flex-direction: column; gap: var(--sp-3); }
 
 .detail-time {
   font-family: var(--font-num);
