@@ -28,6 +28,7 @@ export interface SolveRow {
   time_ms: number
   penalty: string
   parity: string[] | null
+  splits: number[] | null
   created_at: string
   updated_at: string
   deleted: boolean
@@ -76,6 +77,9 @@ export function solveToRow(s: Solve, userId: string): SolveRow {
     // null means untracked, [] means measured as clean. Collapsing the two
     // would bias every parity comparison.
     parity: s.parity ?? null,
+    // null means untracked, [] means tracked with no boundaries -- the same
+    // distinction `parity` draws directly above.
+    splits: s.splits ?? null,
     created_at: iso(s.createdAt),
     updated_at: iso(s.updatedAt),
     deleted: s.deleted ?? false,
@@ -90,6 +94,7 @@ export function rowToSolve(r: SolveRow): Solve {
     timeMs: r.time_ms,
     penalty: r.penalty as Solve['penalty'],
     parity: r.parity ? (r.parity as ParityId[]) : r.parity === null ? undefined : [],
+    splits: r.splits ?? undefined,
     createdAt: ms(r.created_at),
     updatedAt: ms(r.updated_at),
     deleted: r.deleted,

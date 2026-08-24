@@ -87,6 +87,13 @@ export interface Solve extends Synced {
    * kept out of parity statistics rather than counted as clean.
    */
   parity?: ParityId[]
+  /**
+   * Cumulative ms at each leg boundary of a relay. N-1 entries for an N-leg
+   * relay -- the final stop already IS timeMs, and storing it twice would let
+   * the two disagree. undefined means splits were not recorded, which is
+   * different from [], exactly as with `parity` above.
+   */
+  splits?: number[]
   /** Raw stopwatch time in ms, before any penalty is applied. */
   timeMs: number
   penalty: Penalty

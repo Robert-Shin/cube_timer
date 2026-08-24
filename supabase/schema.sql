@@ -31,10 +31,15 @@ create table if not exists public.solves (
   -- The distinction matters: treating untracked as clean would bias the
   -- no-parity mean that every parity comparison is measured against.
   parity      text[],
+  -- Cumulative ms at each relay leg boundary; null = splits not recorded.
+  -- N-1 entries for an N-leg relay: the final stop is time_ms itself.
+  splits      integer[],
   created_at  timestamptz not null,
   updated_at  timestamptz not null,
   deleted     boolean not null default false
 );
+
+alter table public.solves add column if not exists splits integer[];
 
 -- Pull queries filter on updated_at within a user; stats read by session.
 create index if not exists sessions_user_updated
