@@ -108,16 +108,16 @@ export function useSync(store: Store, applyRemote: (next: Store) => void) {
 
       if (pulledSessions.length || pulledSolves.length) {
         const current = storeRef.current
+        // The discipline pointers are device-local: carried across the merge,
+        // never pushed and never overwritten by a pull. They need no repair
+        // when a pull deletes the session they name -- activeSessionOf falls
+        // back to another live session of that discipline at read time, and
+        // to a draft when there is none.
         const merged = {
           sessions: mergeRows(current.sessions, pulledSessions),
           solves: newestFirst(mergeRows(current.solves, pulledSolves)),
-          activeId: current.activeId,
-        }
-        // A pull can arrive for a session this device has never seen; make
-        // sure the active id still points at something live.
-        const live = merged.sessions.filter((s) => !s.deleted)
-        if (live.length > 0 && !live.some((s) => s.id === merged.activeId)) {
-          merged.activeId = live[0].id
+          activeDiscipline: current.activeDiscipline,
+          activeByDiscipline: current.activeByDiscipline,
         }
         applyRef.current(merged)
         // Keep the mirror in step with the state we just set. `applyRemote` is
@@ -152,14 +152,18 @@ export function useSync(store: Store, applyRemote: (next: Store) => void) {
         // public board for the rest of the UTC day with no solves behind it.
         // Retraction *is* a publish call that finds no best and deletes.
         // Filtered to the events that actually have a board: publishing for
-        // 333oh/333bf/… only writes rows no query ever reads.
+        // 333oh/333bf/… only writes rows no query ever reads. Discipline keys
+        // are what is mapped here; a single-event key IS its EventId, and a
+        // relay key can never satisfy isChallengeEvent -- so relays fall out
+        // of the board on their own, which is correct: there is no daily
+        // challenge for a relay.
         const events = new Set(
-          storeRef.current.sessions.map((s) => s.event).filter(isChallengeEvent),
+          storeRef.current.sessions.map((s) => s.discipline).filter(isChallengeEvent),
         )
         for (const event of events) {
           await publishBestOfDay(
             storeRef.current.solves.filter(
-              (s) => storeRef.current.sessions.find((x) => x.id === s.sessionId)?.event === event,
+              (s) => storeRef.current.sessions.find((x) => x.id === s.sessionId)?.discipline === event,
             ),
             event,
             // The push and the pull above both succeeded (either would have

@@ -1,33 +1,41 @@
 import { useState } from 'react'
 import { EVENTS, MAX_SESSIONS, type EventId, type Session } from './types'
-import type { Store } from './storage'
+import { disciplineKey, disciplineLabel, eventDiscipline, parseDiscipline } from './discipline'
+import { defaultSessionName, deleteSession, sessionsOf, type Store } from './storage'
 import { parseTime } from './parseTime'
-import { touch, tombstone } from './sync/stamp'
+import { touch } from './sync/stamp'
 import { formatMs } from './format'
 
 /**
- * csTimer-style session management: any number of named sessions up to the
- * cap, each bound to a WCA event, so two 3x3 sessions can coexist.
+ * Manages the logs of ONE discipline, not every session in the app.
+ *
+ * The event dropdown that used to sit on every row is gone. It was the whole
+ * reason "is a session a log or a puzzle?" had no answer -- and it let a
+ * session full of 3x3 solves be re-pointed at 4x4 by a stray scroll. Which
+ * discipline a session belongs to is now set when it is created, and changed
+ * only by the deliberate Move control below.
  */
 export function SessionManager({
   store,
+  discipline,
   counts,
   onChange,
   onClose,
 }: {
   store: Store
+  discipline: string
   counts: Record<string, number>
   onChange: (next: Store) => void
   onClose: () => void
 }) {
-  const [name, setName] = useState('')
-  const [event, setEvent] = useState<EventId>('333')
   const [confirming, setConfirming] = useState<string | null>(null)
+  const [moving, setMoving] = useState<string | null>(null)
 
-  // Tombstoned sessions still sit in the store; they are not shown and do
-  // not consume a slot.
-  const live = store.sessions.filter((s) => !s.deleted)
-  const full = live.length >= MAX_SESSIONS
+  const parsed = parseDiscipline(discipline)
+  const label = parsed ? disciplineLabel(parsed) : discipline
+  const mine = sessionsOf(store, discipline)
+  const liveTotal = store.sessions.filter((s) => !s.deleted).length
+  const full = liveTotal >= MAX_SESSIONS
 
   // Every edit bumps updatedAt, or the change would lose the next
   // reconciliation and silently revert.
@@ -37,45 +45,48 @@ export function SessionManager({
       sessions: store.sessions.map((s) => (s.id === id ? touch(s, fields) : s)),
     })
 
+  // No name is asked for: one is generated and can be edited in place. Having
+  // to invent a name before timing was the other half of what made creating a
+  // session a chore.
   const add = () => {
     if (full) return
+    const at = Date.now()
     const session: Session = {
       id: crypto.randomUUID(),
-      name: name.trim() || EVENTS.find((e) => e.id === event)!.name,
-      event,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      name: defaultSessionName(discipline, at),
+      discipline,
+      createdAt: at,
+      updatedAt: at,
     }
-    onChange({ ...store, sessions: [...store.sessions, session], activeId: session.id })
-    setName('')
+    onChange({
+      ...store,
+      sessions: [...store.sessions, session],
+      activeByDiscipline: { ...store.activeByDiscipline, [discipline]: session.id },
+    })
   }
 
   const remove = (id: string) => {
-    if (live.length <= 1) return
-    // Tombstones, not removal: a row deleted outright is invisible to another
-    // device, which would resurrect it on the next pull.
-    const sessions = store.sessions.map((s) => (s.id === id ? tombstone(s) : s))
-    const remaining = sessions.filter((s) => !s.deleted)
-    onChange({
-      sessions,
-      solves: store.solves.map((s) => (s.sessionId === id ? tombstone(s) : s)),
-      activeId: store.activeId === id ? remaining[0].id : store.activeId,
-    })
+    onChange(deleteSession(store, id))
     setConfirming(null)
+  }
+
+  const move = (id: string, key: string) => {
+    patch(id, { discipline: key })
+    setMoving(null)
   }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="panel-head">
-          <h2>Sessions</h2>
+          <h2>{label} sessions</h2>
           <button className="ghost small" onClick={onClose}>
             Close
           </button>
         </div>
 
         <div className="session-list">
-          {live.map((s) => (
+          {mine.map((s) => (
             <div key={s.id} className="session-row">
               <input
                 className="name-input"
@@ -83,17 +94,6 @@ export function SessionManager({
                 onChange={(e) => patch(s.id, { name: e.target.value })}
                 aria-label="Session name"
               />
-              <select
-                value={s.event}
-                onChange={(e) => patch(s.id, { event: e.target.value as EventId })}
-                aria-label="Event"
-              >
-                {EVENTS.map((ev) => (
-                  <option key={ev.id} value={ev.id}>
-                    {ev.name}
-                  </option>
-                ))}
-              </select>
               <input
                 className="goal-input"
                 defaultValue={s.goalMs ? formatMs(s.goalMs) : ''}
@@ -108,45 +108,55 @@ export function SessionManager({
                 }}
               />
               <span className="count">{counts[s.id] ?? 0}</span>
+
+              {moving === s.id ? (
+                <select
+                  autoFocus
+                  defaultValue=""
+                  aria-label="Move to"
+                  onChange={(e) => e.target.value && move(s.id, e.target.value)}
+                  onBlur={() => setMoving(null)}
+                >
+                  <option value="" disabled>
+                    Move to…
+                  </option>
+                  {EVENTS.filter((ev) => ev.id !== discipline).map((ev) => (
+                    <option key={ev.id} value={disciplineKey(eventDiscipline(ev.id as EventId))}>
+                      {ev.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <button className="ghost small" onClick={() => setMoving(s.id)}>
+                  Move
+                </button>
+              )}
+
               {confirming === s.id ? (
                 <button className="danger small" onClick={() => remove(s.id)}>
                   Delete {counts[s.id] ?? 0} solves?
                 </button>
               ) : (
-                <button
-                  className="ghost small"
-                  disabled={live.length <= 1}
-                  title={live.length <= 1 ? 'The last session cannot be deleted' : ''}
-                  onClick={() => setConfirming(s.id)}
-                >
+                <button className="ghost small" onClick={() => setConfirming(s.id)}>
                   Delete
                 </button>
               )}
             </div>
           ))}
+          {mine.length === 0 && (
+            <p className="note">
+              No {label} sessions yet — your first solve starts one.
+            </p>
+          )}
         </div>
 
         <div className="session-add">
-          <input
-            placeholder="New session name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && add()}
-            aria-label="New session name"
-          />
-          <select value={event} onChange={(e) => setEvent(e.target.value as EventId)}>
-            {EVENTS.map((ev) => (
-              <option key={ev.id} value={ev.id}>
-                {ev.name}
-              </option>
-            ))}
-          </select>
           <button className="primary" onClick={add} disabled={full}>
-            Add
+            New {label} session
           </button>
         </div>
         <p className="note">
-          {live.length} of {MAX_SESSIONS} sessions
+          {liveTotal} of {MAX_SESSIONS} sessions across all disciplines
           {full ? ' — delete one to add another' : ''}
         </p>
       </div>

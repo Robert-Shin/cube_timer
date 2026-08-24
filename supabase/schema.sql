@@ -505,8 +505,18 @@ grant delete on public.friendships to authenticated;
 -- reveal_daily. Both return NO ROWS when the caller is not an accepted
 -- friend.
 
+-- These took p_event and aggregated across every session the friend had for
+-- it, discarding which log a solve belonged to -- so a friend profile could
+-- only ever ask "how is their 3x3", never "how is their 3x3 warmup". They are
+-- keyed by session now. The old signatures are dropped rather than replaced:
+-- `create or replace` cannot change a parameter's type, so it would leave the
+-- text-taking versions in place as live overloads, still callable and still
+-- granted.
+drop function if exists public.friend_calendar(uuid, text, date);
+drop function if exists public.friend_stats(uuid, text);
+
 create or replace function public.friend_calendar(
-  p_user uuid, p_event text, p_since date)
+  p_user uuid, p_session uuid, p_since date)
 returns table (day date, solves int, day_best int)
 language sql stable security definer set search_path = public as $$
   select
@@ -518,7 +528,12 @@ language sql stable security definer set search_path = public as $$
   from public.solves s
   join public.sessions n on n.id = s.session_id
   where s.user_id = p_user
-    and n.event = p_event
+    and n.id = p_session
+    -- n.user_id = p_user is NOT redundant with s.user_id = p_user. Without
+    -- it, p_session is an unvalidated id from the caller: the check that
+    -- matters is that the session being read belongs to the friend named in
+    -- p_user, not merely that some solves in it do.
+    and n.user_id = p_user
     and not s.deleted
     and not n.deleted
     and (s.created_at at time zone 'UTC')::date >= p_since
@@ -527,7 +542,7 @@ language sql stable security definer set search_path = public as $$
   order by 1;
 $$;
 
-create or replace function public.friend_stats(p_user uuid, p_event text)
+create or replace function public.friend_stats(p_user uuid, p_session uuid)
 returns table (total int, best_ms int, recent_ms int[])
 language sql stable security definer set search_path = public as $$
   with mine as (
@@ -538,7 +553,8 @@ language sql stable security definer set search_path = public as $$
     from public.solves s
     join public.sessions n on n.id = s.session_id
     where s.user_id = p_user
-      and n.event = p_event
+      and n.id = p_session
+      and n.user_id = p_user
       and not s.deleted
       and not n.deleted
       and public.are_friends(auth.uid(), p_user)
@@ -559,11 +575,19 @@ language sql stable security definer set search_path = public as $$
   -- assertion) requires. This WHERE is what actually makes that true;
   -- `mine`'s filter alone is not enough because it only empties the
   -- aggregates, it doesn't remove the row.
+  -- The session-ownership check is repeated here for the same reason the
+  -- are_friends check is: this select list has no FROM clause, so it returns
+  -- one row of (0, null, null) regardless of what `mine` filtered away. Both
+  -- conditions have to appear HERE to yield zero rows.
   select
     (select count(*)::int from mine),
     (select min(eff)::int from mine),
     (select arr from recent)
-  where public.are_friends(auth.uid(), p_user);
+  where public.are_friends(auth.uid(), p_user)
+    and exists (
+      select 1 from public.sessions n
+      where n.id = p_session and n.user_id = p_user and not n.deleted
+    );
 $$;
 
 -- A friend profile shows today's daily-challenge result. This CANNOT reuse
@@ -595,9 +619,44 @@ language sql stable security definer set search_path = public as $$
     and public.are_friends(auth.uid(), p_user);
 $$;
 
-revoke all on function public.friend_calendar(uuid, text, date) from public, anon, authenticated;
-revoke all on function public.friend_stats(uuid, text) from public, anon, authenticated;
+-- The list a friend profile picks from. Same security-definer posture and
+-- the same are_friends gate as the three above: RLS does not apply inside
+-- this function, so that check IS the boundary, in full.
+--
+-- Note this exposes session NAMES to accepted friends, which nothing did
+-- before. That is intended -- picking between a friend's sessions is
+-- meaningless if you cannot see what they are called -- but it is a
+-- deliberate widening of what accepting a friend request discloses, not an
+-- accident.
+--
+-- Sessions with no solves are omitted: an empty log is noise, not practice,
+-- and every device that has ever opened a discipline could otherwise
+-- contribute one.
+create or replace function public.friend_sessions(p_user uuid)
+returns table (id uuid, name text, discipline text, solves int, last_solve_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select
+    n.id,
+    n.name,
+    -- The column is still called `event`; it holds a discipline key, which
+    -- for a single-event discipline is byte-identical to its EventId.
+    n.event as discipline,
+    count(s.id)::int as solves,
+    max(s.created_at) as last_solve_at
+  from public.sessions n
+  join public.solves s on s.session_id = n.id and not s.deleted
+  where n.user_id = p_user
+    and not n.deleted
+    and public.are_friends(auth.uid(), p_user)
+  group by n.id, n.name, n.event
+  order by max(s.created_at) desc;
+$$;
+
+revoke all on function public.friend_calendar(uuid, uuid, date) from public, anon, authenticated;
+revoke all on function public.friend_stats(uuid, uuid) from public, anon, authenticated;
 revoke all on function public.friend_daily(uuid, text) from public, anon, authenticated;
-grant execute on function public.friend_calendar(uuid, text, date) to authenticated;
-grant execute on function public.friend_stats(uuid, text) to authenticated;
+revoke all on function public.friend_sessions(uuid) from public, anon, authenticated;
+grant execute on function public.friend_calendar(uuid, uuid, date) to authenticated;
+grant execute on function public.friend_stats(uuid, uuid) to authenticated;
 grant execute on function public.friend_daily(uuid, text) to authenticated;
+grant execute on function public.friend_sessions(uuid) to authenticated;

@@ -1,9 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { effectiveMs, eventName, MAX_SESSIONS, type EventId, type Penalty, type Session, type Solve } from './types'
+import { effectiveMs, EVENTS, MAX_SESSIONS, type EventId, type Penalty, type Session, type Solve } from './types'
+import {
+  disciplineKey,
+  eventDiscipline,
+  parseDiscipline,
+  soleEvent,
+} from './discipline'
 import { formatMs, formatSolve } from './format'
 import { averageOf, best } from './stats'
 import { newScramble } from './scramble'
-import { loadStore, save, type Store } from './storage'
+import {
+  activeSessionOf,
+  commitDraft,
+  defaultSessionName,
+  loadStore,
+  save,
+  type Store,
+} from './storage'
 import { useTimer } from './useTimer'
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings } from './settings'
 import { parseTime } from './parseTime'
@@ -49,12 +62,6 @@ export default function App() {
   const [showAuth, setShowAuth] = useState(false)
   const [showFriends, setShowFriends] = useState(false)
   const [openFriend, setOpenFriend] = useState<{ id: string; name: string } | null>(null)
-  // The event FriendProfile is showing, independent of the viewer's own
-  // session event. null means "use the viewer's current session event" --
-  // the default -- so this only needs setting once the viewer actually
-  // picks something different, and resets to that default (not to whatever
-  // was last picked) every time a new friend is opened.
-  const [friendEvent, setFriendEvent] = useState<EventId | null>(null)
   // Solve awaiting a parity answer; it is already recorded, so a reload
   // during the prompt keeps the time and simply leaves parity unset.
   const [pendingParity, setPendingParity] = useState<string | null>(null)
@@ -68,7 +75,50 @@ export default function App() {
   const liveSessions = useMemo(() => visible(store.sessions), [store.sessions])
   const liveSolves = useMemo(() => visible(store.solves), [store.solves])
 
-  const session = liveSessions.find((s) => s.id === store.activeId) ?? liveSessions[0]
+  const discipline = store.activeDiscipline
+
+  // A discipline you have never timed has no session yet -- picking one must
+  // not write an empty log that then syncs to every other device. So App
+  // holds a DRAFT: a real Session with a real id, memoised on the discipline
+  // key so it is stable across renders, committed to the store together with
+  // the first solve. Keeping it non-null here is deliberate; every read of
+  // session.id/.name/.goalMs below would otherwise need a null branch.
+  //
+  // Keyed on store.sessions as well as the discipline, not the discipline
+  // alone: after the last session of a discipline is deleted, a draft held
+  // over from before would still carry the id that session was TOMBSTONED
+  // under. Committing it would write a live row whose id already has a
+  // tombstone, and the tombstone -- being newer -- would win the next
+  // reconciliation and silently delete the solve. A fresh id per session
+  // change costs one uuid and closes that.
+  const draft = useMemo<Session>(() => {
+    const at = Date.now()
+    return {
+      id: crypto.randomUUID(),
+      name: defaultSessionName(discipline, at),
+      discipline,
+      createdAt: at,
+      updatedAt: at,
+    }
+  }, [discipline, store.sessions])
+
+  const stored = activeSessionOf(store, discipline)
+  const session = stored ?? draft
+  const isDraft = stored === undefined
+
+  // The live sessions of this discipline. The switcher only renders when
+  // there is more than one -- the second axis appears exactly when it is
+  // being used, and stays out of the way otherwise.
+  const siblings = useMemo(
+    () => liveSessions.filter((s) => s.discipline === discipline),
+    [liveSessions, discipline],
+  )
+
+  // Relays are not offered yet, so every live discipline is single-event.
+  // When they ship, this is the seam that has to learn to produce N
+  // scrambles -- soleEvent returns null there rather than silently taking
+  // the first leg.
+  const event = soleEvent(parseDiscipline(discipline) ?? eventDiscipline('333')) ?? '333'
 
   // Newest first, so stats windows are just slices from the front.
   const solves = useMemo(
@@ -220,35 +270,37 @@ export default function App() {
       .finally(() => setScrambling(false))
   }, [])
 
-  useEffect(() => nextScramble(session.event), [session.event, nextScramble])
+  useEffect(() => nextScramble(event), [event, nextScramble])
 
   /** Single path for recording a solve, whether timed or typed. */
   const record = useCallback(
     (timeMs: number) => {
       const id = crypto.randomUUID()
-      const asking = settings.trackParity && hasParity(session.event)
-      setStore((prev) => ({
-        ...prev,
-        solves: [
-          {
-            id,
-            sessionId: session.id,
-            scramble,
-            timeMs,
-            penalty: 'none' as Penalty,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            // Events without parity record [] -- definitively none, not
-            // unknown -- so they never show up as untracked.
-            ...(asking ? {} : { parity: [] as ParityId[] }),
-          },
-          ...prev.solves,
-        ],
-      }))
+      const asking = settings.trackParity && hasParity(event)
+      const solve: Solve = {
+        id,
+        sessionId: session.id,
+        scramble,
+        timeMs,
+        penalty: 'none' as Penalty,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        // Events without parity record [] -- definitively none, not
+        // unknown -- so they never show up as untracked.
+        ...(asking ? {} : { parity: [] as ParityId[] }),
+      }
+      // A draft session becomes real here, written in the same update as the
+      // solve that justifies it. The solve already carries the draft's id, so
+      // the two cannot disagree.
+      setStore((prev) =>
+        isDraft
+          ? commitDraft(prev, session, solve)
+          : { ...prev, solves: [solve, ...prev.solves] },
+      )
       if (asking) setPendingParity(id)
-      nextScramble(session.event)
+      nextScramble(event)
     },
-    [session.id, session.event, scramble, nextScramble, settings.trackParity],
+    [session, isDraft, event, scramble, nextScramble, settings.trackParity],
   )
 
   const typing = settings.inputMode === 'typing'
@@ -295,13 +347,22 @@ export default function App() {
   }
 
   const handleImport = (sessions: Session[], imported: Solve[]) => {
-    setStore((prev) => ({
-      sessions: [...prev.sessions, ...sessions],
-      // Imported solves carry their original timestamps, so re-sort the whole
-      // list newest-first rather than just prepending them.
-      solves: [...imported, ...prev.solves].sort((a, b) => b.createdAt - a.createdAt),
-      activeId: sessions[0]?.id ?? prev.activeId,
-    }))
+    setStore((prev) => {
+      const first = sessions[0]
+      return {
+        ...prev,
+        sessions: [...prev.sessions, ...sessions],
+        // Imported solves carry their original timestamps, so re-sort the
+        // whole list newest-first rather than just prepending them.
+        solves: [...imported, ...prev.solves].sort((a, b) => b.createdAt - a.createdAt),
+        // Land on the first imported session, and remember it as that
+        // discipline's active log so switching away and back returns to it.
+        activeDiscipline: first ? first.discipline : prev.activeDiscipline,
+        activeByDiscipline: first
+          ? { ...prev.activeByDiscipline, [first.discipline]: first.id }
+          : prev.activeByDiscipline,
+      }
+    })
     setImporting(false)
     flash(`Imported ${imported.length} solves into ${sessions.length} sessions`)
   }
@@ -312,7 +373,7 @@ export default function App() {
   // An unset goal falls back to a suggestion from the data, so the rate is
   // useful before anyone opens the session manager.
   const goal = session.goalMs ?? suggestGoal(solves)
-  const parityEvent = hasParity(session.event)
+  const parityEvent = hasParity(event)
   // Tags only make sense while tracking is on: with it off, older solves would
   // keep showing parity that new solves silently never record.
   const showParityTags = settings.trackParity && parityEvent
@@ -380,17 +441,44 @@ export default function App() {
         {/* Right: what you actually operate. */}
         <div className="header-actions">
           <div className="session-pick">
+            {/* The primary axis: what you are practising. Sessions nest
+                inside it. */}
             <select
-              value={session.id}
-              onChange={(e) => setStore((prev) => ({ ...prev, activeId: e.target.value }))}
-              aria-label="Session"
+              value={discipline}
+              onChange={(e) =>
+                setStore((prev) => ({ ...prev, activeDiscipline: e.target.value }))
+              }
+              aria-label="Discipline"
             >
-              {liveSessions.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} · {eventName(s.event)} ({counts[s.id] ?? 0})
+              {EVENTS.map((ev) => (
+                <option key={ev.id} value={disciplineKey(eventDiscipline(ev.id))}>
+                  {ev.name}
                 </option>
               ))}
             </select>
+            {/* Only when this discipline actually has more than one log --
+                otherwise the control is dead weight on every screen. */}
+            {siblings.length > 1 && (
+              <select
+                value={session.id}
+                onChange={(e) =>
+                  setStore((prev) => ({
+                    ...prev,
+                    activeByDiscipline: {
+                      ...prev.activeByDiscipline,
+                      [discipline]: e.target.value,
+                    },
+                  }))
+                }
+                aria-label="Session"
+              >
+                {siblings.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({counts[s.id] ?? 0})
+                  </option>
+                ))}
+              </select>
+            )}
             <button className="ghost small manage" onClick={() => setShowSessions(true)}>
               Manage
             </button>
@@ -560,7 +648,7 @@ export default function App() {
             <>
               <p className="scramble dimmable">
                 {scrambling ? 'Generating scramble…' : scramble}
-                <button className="ghost small refresh" onClick={() => nextScramble(session.event)}>
+                <button className="ghost small refresh" onClick={() => nextScramble(event)}>
                   ↻
                 </button>
               </p>
@@ -630,7 +718,7 @@ export default function App() {
               solves={solves}
               bucketMs={bucketMs}
               splitByParity={parityEvent}
-              event={session.event}
+              event={event}
             />
           </section>
 
@@ -687,7 +775,7 @@ export default function App() {
               <div className="panel-head">
                 <h2>Cost of parity</h2>
               </div>
-              <ParityBreakdown solves={solves} event={session.event} />
+              <ParityBreakdown solves={solves} event={event} />
             </section>
           )}
         </div>
@@ -699,8 +787,8 @@ export default function App() {
               // event's scramble on screen with an armed timer, writing that
               // scramble into the new session and submitting against an event
               // that was never revealed.
-              key={session.event}
-              event={session.event}
+              key={event}
+              event={event}
               paused={modalOpen}
               onRecord={(timeMs, scrambleUsed) => {
                 // An ordinary local solve: no new column on `solves`, because
@@ -721,7 +809,7 @@ export default function App() {
                       // when parity is being tracked but was never asked --
                       // that would bias the no-parity mean. Same rule as the
                       // ordinary record() path.
-                      ...(settings.trackParity && hasParity(session.event)
+                      ...(settings.trackParity && hasParity(event)
                         ? {}
                         : { parity: [] as ParityId[] }),
                     },
@@ -755,7 +843,7 @@ export default function App() {
                   {s.id === pbId && solves.length > 1 && <span className="tag pb-tag">PB</span>}
                 </button>
                 {showParityTags &&
-                  parityTags(session.event, s.parity).map((t) => (
+                  parityTags(event, s.parity).map((t) => (
                     <span key={t.id} className={`tag parity-tag p-${t.id}`} title={t.title}>
                       {t.label}
                     </span>
@@ -784,6 +872,7 @@ export default function App() {
       {showSessions && (
         <SessionManager
           store={store}
+          discipline={discipline}
           counts={counts}
           onChange={setStore}
           onClose={() => setShowSessions(false)}
@@ -800,7 +889,7 @@ export default function App() {
         <SolveDetail
           solve={detail}
           ordinal={solves.length - solves.indexOf(detail)}
-          event={session.event}
+          event={event}
           onPenalty={(p) => setPenalty(detail.id, p)}
           onParity={(parity) =>
             setStore((prev) => ({
@@ -817,7 +906,7 @@ export default function App() {
       )}
       {pending && (
         <ParityPrompt
-          event={session.event}
+          event={event}
           timeMs={pending.timeMs}
           onAnswer={(parity) => {
             setStore((prev) => ({
@@ -879,23 +968,14 @@ export default function App() {
           <FriendProfile
             userId={openFriend.id}
             username={openFriend.name}
-            event={friendEvent ?? session.event}
-            onEventChange={setFriendEvent}
-            onClose={() => {
-              setOpenFriend(null)
-              setFriendEvent(null)
-            }}
+            onClose={() => setOpenFriend(null)}
           />
         ) : (
           <FriendsPanel
-            onOpen={(id, name) => {
-              setFriendEvent(null)
-              setOpenFriend({ id, name })
-            }}
+            onOpen={(id, name) => setOpenFriend({ id, name })}
             onClose={() => {
               setShowFriends(false)
               setOpenFriend(null)
-              setFriendEvent(null)
             }}
           />
         ))}

@@ -68,7 +68,9 @@ export function ImportDialog({
       const session: Session = {
         id: crypto.randomUUID(),
         name: row.name.trim() || s.name,
-        event: row.event,
+        // row.event is an EventId, which is already a valid single-event
+        // discipline key.
+        discipline: row.event,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       }

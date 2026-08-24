@@ -204,7 +204,7 @@ export async function listFriends() {
  */
 export async function friendProfile(
   userId: string,
-  event: EventId,
+  sessionId: string,
   sinceDays: number,
 ): Promise<FriendProfileView | null> {
   if (!supabase) return null
@@ -212,8 +212,8 @@ export async function friendProfile(
 
   try {
     const [cal, stats] = await Promise.all([
-      supabase.rpc('friend_calendar', { p_user: userId, p_event: event, p_since: since }),
-      supabase.rpc('friend_stats', { p_user: userId, p_event: event }),
+      supabase.rpc('friend_calendar', { p_user: userId, p_session: sessionId, p_since: since }),
+      supabase.rpc('friend_stats', { p_user: userId, p_session: sessionId }),
     ])
     if (cal.error || stats.error) return null
 
@@ -235,6 +235,41 @@ export async function friendProfile(
     // decision by the server. Promise.all rejects as soon as either RPC's
     // fetch fails, e.g. offline/DNS/TLS -- distinct from `cal.error` /
     // `stats.error`, which is the server responding with a decision.
+    return null
+  }
+}
+
+export interface FriendSessionView {
+  id: string
+  name: string
+  /** Discipline key -- see discipline.ts. */
+  discipline: string
+  solves: number
+}
+
+/**
+ * The friend's sessions, busiest-first by recency, for the profile's picker.
+ *
+ * Null is reserved for a genuine failure; an empty array is the ordinary
+ * "this friend has no solves" state. Conflating the two is the mistake this
+ * codebase has made before -- see friendDaily's three-outcome comment below.
+ */
+export async function friendSessions(userId: string): Promise<FriendSessionView[] | null> {
+  if (!supabase) return null
+  try {
+    const { data, error } = await supabase.rpc('friend_sessions', { p_user: userId })
+    if (error) return null
+    return (data ?? []).map(
+      (r: { id: string; name: string; discipline: string; solves: number }) => ({
+        id: r.id,
+        name: r.name,
+        discipline: r.discipline,
+        solves: r.solves,
+      }),
+    )
+  } catch {
+    // A thrown rejection is the fetch layer failing outright -- never a
+    // decision by the server.
     return null
   }
 }

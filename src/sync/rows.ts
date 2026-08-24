@@ -1,11 +1,17 @@
 import type { ParityId } from '../parity'
-import type { EventId, Session, Solve } from '../types'
+import type { Session, Solve } from '../types'
 
 /** Database row shapes. snake_case here, camelCase everywhere else. */
 export interface SessionRow {
   id: string
   user_id: string
   name: string
+  /**
+   * The session's discipline key. The column keeps its old name: a
+   * single-event key is byte-identical to the EventId that used to live
+   * here, so every existing row is already valid and renaming the column
+   * would buy nothing but a migration.
+   */
   event: string
   goal_ms: number | null
   color: number | null
@@ -37,7 +43,7 @@ export function sessionToRow(s: Session, userId: string): SessionRow {
     id: s.id,
     user_id: userId,
     name: s.name,
-    event: s.event,
+    event: s.discipline,
     goal_ms: s.goalMs ?? null,
     color: s.color ?? null,
     created_at: iso(s.createdAt),
@@ -50,7 +56,7 @@ export function rowToSession(r: SessionRow): Session {
   return {
     id: r.id,
     name: r.name,
-    event: r.event as EventId,
+    discipline: r.event,
     goalMs: r.goal_ms ?? undefined,
     color: r.color ?? undefined,
     createdAt: ms(r.created_at),

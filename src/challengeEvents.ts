@@ -15,6 +15,12 @@ export const CHALLENGE_EVENTS: EventId[] = [
 
 const SET = new Set<string>(CHALLENGE_EVENTS)
 
-export function isChallengeEvent(event: EventId): boolean {
+/**
+ * Takes a plain string, not an EventId, so a discipline key can be tested
+ * directly: a single-event key IS its EventId, and a relay key simply fails
+ * -- which is the right answer, since relays have no daily challenge. The
+ * type guard is what lets callers narrow a key to an EventId afterwards.
+ */
+export function isChallengeEvent(event: string): event is EventId {
   return SET.has(event)
 }

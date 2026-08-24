@@ -268,9 +268,10 @@ const REQUIRED_FUNCTIONS = [
   // Probed with a random uuid: are_friends is false for it, so both return
   // no rows without touching anyone's data. Only PGRST202 (function missing)
   // fails the preflight.
-  { name: 'friend_calendar', args: { p_user: '00000000-0000-0000-0000-000000000000', p_event: '__preflight_probe__', p_since: '2000-01-01' } },
-  { name: 'friend_stats', args: { p_user: '00000000-0000-0000-0000-000000000000', p_event: '__preflight_probe__' } },
+  { name: 'friend_calendar', args: { p_user: '00000000-0000-0000-0000-000000000000', p_session: '00000000-0000-0000-0000-000000000000', p_since: '2000-01-01' } },
+  { name: 'friend_stats', args: { p_user: '00000000-0000-0000-0000-000000000000', p_session: '00000000-0000-0000-0000-000000000000' } },
   { name: 'friend_daily', args: { p_user: '00000000-0000-0000-0000-000000000000', p_event: '__preflight_probe__' } },
+  { name: 'friend_sessions', args: { p_user: '00000000-0000-0000-0000-000000000000' } },
 ]
 for (const { name, args } of REQUIRED_FUNCTIONS) {
   const { error } = await admin.rpc(name, args)
@@ -280,10 +281,13 @@ for (const { name, args } of REQUIRED_FUNCTIONS) {
   }
 }
 
-// Hoisted above the try so the finally block can see it regardless of where
-// (or whether) the friend_calendar/friend_stats assertions below manage to
-// run -- a mid-run throw must not strand the seeded session/solve.
+// Hoisted above the try so the finally block can see them regardless of
+// where (or whether) the friend_calendar/friend_stats assertions below
+// manage to run -- a mid-run throw must not strand the seeded sessions.
 let friendSessionId = null
+// A second session for b holding NO solves, used to prove friend_sessions
+// omits empty logs. Seeded and cleaned alongside the one above.
+let friendEmptySessionId = null
 
 try {
   const stamp = Date.now()
@@ -967,6 +971,16 @@ try {
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
   }).throwOnError()
 
+  // A second session for b with no solves at all. friend_sessions must omit
+  // it: an empty log is noise rather than practice, and every device that
+  // ever opened a discipline could otherwise contribute one.
+  friendEmptySessionId = randomUUID()
+  await admin.from('sessions').insert({
+    id: friendEmptySessionId, user_id: b.userId, name: 'harness empty',
+    event: SENTINEL_EVENT_FRIEND,
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  }).throwOnError()
+
   // Positive controls FIRST, and against the real, seeded solve's effective
   // time -- not just "some rows came back". Every negative assertion below
   // (expectEmpty) passes just as well if the fixture were never seeded, the
@@ -977,7 +991,7 @@ try {
   // nothing there to leak in the first place".
   await check('friend_calendar: an accepted friend sees the calendar', async () => {
     const { data, error } = await a.client.rpc('friend_calendar', {
-      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND, p_since: '2000-01-01',
+      p_user: b.userId, p_session: friendSessionId, p_since: '2000-01-01',
     })
     assert(!error, `unexpected error ${error?.message}`)
     assert((data ?? []).length === 1, `expected 1 day, got ${(data ?? []).length}`)
@@ -998,7 +1012,7 @@ try {
   // has one.
   await check('friend_calendar: the row exposes no solve/scramble/session id', async () => {
     const { data, error } = await a.client.rpc('friend_calendar', {
-      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND, p_since: '2000-01-01',
+      p_user: b.userId, p_session: friendSessionId, p_since: '2000-01-01',
     })
     assert(!error, `unexpected error ${error?.message}`)
     const keys = Object.keys(data[0]).sort()
@@ -1018,7 +1032,7 @@ try {
   // no evidence the friend path itself was ever exercised correctly.
   await check('friend_stats: an accepted friend sees the aggregate', async () => {
     const { data, error } = await a.client.rpc('friend_stats', {
-      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND,
+      p_user: b.userId, p_session: friendSessionId,
     })
     assert(!error, `unexpected error ${error?.message}`)
     assert((data ?? []).length === 1, `expected 1 row, got ${(data ?? []).length}`)
@@ -1038,7 +1052,7 @@ try {
   // Assert the exact column set.
   await check('friend_stats: the row exposes no solve/scramble/session id', async () => {
     const { data, error } = await a.client.rpc('friend_stats', {
-      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND,
+      p_user: b.userId, p_session: friendSessionId,
     })
     assert(!error, `unexpected error ${error?.message}`)
     const keys = Object.keys(data[0]).sort()
@@ -1048,6 +1062,108 @@ try {
       `expected exactly columns ${JSON.stringify(expected)}, got ${JSON.stringify(keys)}`,
     )
   })
+
+  // ------------------------------------------------------ friend_sessions
+  //
+  // The list a friend profile now picks from. Same security-definer posture
+  // and the same are_friends boundary as the two above, and one thing
+  // neither of them had: it returns session NAMES -- user-authored text that
+  // nothing exposed across accounts before this function existed. The
+  // stranger and anon assertions below are what keep that disclosure scoped
+  // to accepted friends.
+  //
+  // Positive control first, for the reason spelled out above friend_calendar:
+  // every expectEmpty below passes just as well against a function that
+  // returns nothing to anybody.
+  await check('friend_sessions: an accepted friend sees the session list', async () => {
+    const { data, error } = await a.client.rpc('friend_sessions', { p_user: b.userId })
+    assert(!error, `unexpected error ${error?.message}`)
+    assert((data ?? []).length === 1, `expected 1 session, got ${(data ?? []).length}`)
+    const row = data[0]
+    assert(row.id === friendSessionId, `expected the seeded session id, got ${row.id}`)
+    assert(row.name === 'harness', `expected name 'harness', got ${JSON.stringify(row.name)}`)
+    assert(
+      row.discipline === SENTINEL_EVENT_FRIEND,
+      `expected discipline ${SENTINEL_EVENT_FRIEND}, got ${JSON.stringify(row.discipline)}`,
+    )
+    assert(row.solves === 1, `expected 1 solve, got ${row.solves}`)
+  })
+
+  // The empty session seeded above must NOT appear. Asserted on the count
+  // via the positive control's `length === 1` as well, but called out
+  // separately so a failure names the actual cause rather than looking like
+  // a generic count mismatch.
+  await check('friend_sessions: a session with no solves is omitted', async () => {
+    const { data, error } = await a.client.rpc('friend_sessions', { p_user: b.userId })
+    assert(!error, `unexpected error ${error?.message}`)
+    assert(
+      !(data ?? []).some((r) => r.id === friendEmptySessionId),
+      'a session with zero solves was listed',
+    )
+  })
+
+  // Same reasoning as the column-set assertions above: the value checks read
+  // named fields and would not notice a solve id, scramble, or goal riding
+  // alongside them. This project's premise is that friends see aggregates
+  // and never raw solve rows -- assert the exact column set.
+  await check('friend_sessions: the row exposes no solve/scramble/goal column', async () => {
+    const { data, error } = await a.client.rpc('friend_sessions', { p_user: b.userId })
+    assert(!error, `unexpected error ${error?.message}`)
+    const keys = Object.keys(data[0]).sort()
+    const expected = ['discipline', 'id', 'last_solve_at', 'name', 'solves']
+    assert(
+      JSON.stringify(keys) === JSON.stringify(expected),
+      `expected exactly columns ${JSON.stringify(expected)}, got ${JSON.stringify(keys)}`,
+    )
+  })
+
+  // c has no friendship with b in either direction. If are_friends were
+  // dropped from friend_sessions' WHERE, this returns b's session -- NAME
+  // included -- to a stranger.
+  await expectEmpty(
+    'friend_sessions: a stranger gets nothing',
+    c.client.rpc('friend_sessions', { p_user: b.userId }),
+  )
+
+  // The grant, not the filter. Exactly the trap that shipped twice on this
+  // project: Supabase's default privileges grant EXECUTE to anon explicitly
+  // per-role at creation, and `revoke ... from public` does not touch them.
+  // An anon caller would then reach the body, where are_friends(null, ...)
+  // is false and the result is empty -- so an expectEmpty here would stay
+  // green over a function anyone holding the public bundle could call.
+  // Only a bare 42501 proves EXECUTE was actually revoked by name.
+  await expectPermissionDenied(
+    'friend_sessions: anon cannot execute the function at all (permission denied, not a filtered-empty result)',
+    anon.rpc('friend_sessions', { p_user: b.userId }),
+  )
+
+  // ------------------------------------ session/user pairing (p_session)
+  //
+  // p_session is an unvalidated id straight from the caller, so being an
+  // accepted friend of b must not turn into "read any session id I can
+  // name". a IS b's accepted friend here, and passes a session id that
+  // belongs to A HERSELF while claiming p_user = b.
+  //
+  // friend_calendar is empty either way -- its solves are already filtered
+  // by s.user_id = p_user -- so this one is a regression guard rather than a
+  // live finding, and is labelled as such honestly.
+  await expectEmpty(
+    'friend_calendar: a session id belonging to someone other than p_user yields nothing',
+    a.client.rpc('friend_calendar', {
+      p_user: b.userId, p_session: sessionId, p_since: '2000-01-01',
+    }),
+  )
+
+  // friend_stats is the one that genuinely needs the `exists (... n.user_id
+  // = p_user ...)` conjunct: its select list has NO FROM clause, so it
+  // returns one row regardless of what the `mine` CTE filtered away. Without
+  // that conjunct this call comes back as a row of (0, null, null) instead
+  // of zero rows -- the same "one row of nulls" trap the are_friends guard
+  // was written for. This assertion fails against a function missing it.
+  await expectEmpty(
+    'friend_stats: a session id belonging to someone other than p_user yields zero rows, not a row of nulls',
+    a.client.rpc('friend_stats', { p_user: b.userId, p_session: sessionId }),
+  )
 
   // --------------------------------------------------------- friend_daily
   //
@@ -1189,7 +1305,7 @@ try {
   await expectEmpty(
     'friend_calendar: a stranger gets nothing',
     c.client.rpc('friend_calendar', {
-      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND, p_since: '2000-01-01',
+      p_user: b.userId, p_session: friendSessionId, p_since: '2000-01-01',
     }),
   )
 
@@ -1199,7 +1315,7 @@ try {
   // aggregates instead of zero rows, and fails.
   await expectEmpty(
     'friend_stats: a stranger gets nothing',
-    c.client.rpc('friend_stats', { p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND }),
+    c.client.rpc('friend_stats', { p_user: b.userId, p_session: friendSessionId }),
   )
 
   // An anonymous caller holding only the public bundle, no session at all.
@@ -1222,12 +1338,12 @@ try {
   await expectPermissionDenied(
     'friend_calendar: anon cannot execute the function at all (permission denied, not a filtered-empty result)',
     anon.rpc('friend_calendar', {
-      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND, p_since: '2000-01-01',
+      p_user: b.userId, p_session: friendSessionId, p_since: '2000-01-01',
     }),
   )
   await expectPermissionDenied(
     'friend_stats: anon cannot execute the function at all (permission denied, not a filtered-empty result)',
-    anon.rpc('friend_stats', { p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND }),
+    anon.rpc('friend_stats', { p_user: b.userId, p_session: friendSessionId }),
   )
 
   // are_friends is the relationship-oracle helper itself: called directly
@@ -1258,7 +1374,7 @@ try {
   await expectEmpty(
     'friend_calendar: a pending request grants no access',
     c.client.rpc('friend_calendar', {
-      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND, p_since: '2000-01-01',
+      p_user: b.userId, p_session: friendSessionId, p_since: '2000-01-01',
     }),
   )
 
@@ -1272,8 +1388,14 @@ try {
   await expectEmpty(
     'friend_calendar: access stops the moment either party unfriends',
     a.client.rpc('friend_calendar', {
-      p_user: b.userId, p_event: SENTINEL_EVENT_FRIEND, p_since: '2000-01-01',
+      p_user: b.userId, p_session: friendSessionId, p_since: '2000-01-01',
     }),
+  )
+  // The session list is the surface that discloses names, so it gets its own
+  // proof that unfriending closes it -- not just the aggregates.
+  await expectEmpty(
+    'friend_sessions: the session list stops being visible the moment either party unfriends',
+    a.client.rpc('friend_sessions', { p_user: b.userId }),
   )
 } finally {
   // Removing the users cascades to their rows. Runs even on a thrown setup
@@ -1291,6 +1413,13 @@ try {
   // cleanup only warns on failure, and a leaked sentinel session is
   // invisible in normal use (its event id matches no real board or stats
   // view) but still a real orphaned row.
+  if (friendEmptySessionId) {
+    try {
+      await admin.from('sessions').delete().eq('id', friendEmptySessionId).throwOnError()
+    } catch (e) {
+      console.warn(`WARNING: failed to delete fixture session ${friendEmptySessionId} — ${e.message}. Remove it manually.`)
+    }
+  }
   if (friendSessionId) {
     try {
       await admin.from('solves').delete().eq('session_id', friendSessionId).throwOnError()

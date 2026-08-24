@@ -50,8 +50,13 @@ export interface Synced {
 export interface Session extends Synced {
   id: string
   name: string
-  /** Which event this session scrambles for. Changeable after the fact. */
-  event: EventId
+  /**
+   * Discipline key -- see discipline.ts. A single-event key is byte-identical
+   * to its EventId, so every row written before disciplines existed is
+   * already valid and no data migration was ever needed. Set at creation;
+   * changed only by the explicit "Move to" action, never by a stray dropdown.
+   */
+  discipline: string
   createdAt: number
   /**
    * Target time in ms for the sub-X rate. Per session, because sub-12 on 3x3

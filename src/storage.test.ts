@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { deleteSession, loadStore } from './storage'
+import { activeSessionOf, commitDraft, deleteSession, loadStore } from './storage'
+import type { Session, Solve } from './types'
 
 const mem = new Map<string, string>()
 
@@ -22,11 +23,13 @@ const seed = (sessions: unknown[], solves: unknown[]) => {
 }
 
 describe('loadStore', () => {
-  it('creates one session on a fresh install', () => {
+  it('starts a fresh install with no session, on 3x3', () => {
+    // No session is written until the first solve commits a draft: creating
+    // one up front would sync an empty log to every other device.
     const store = loadStore()
-    expect(store.sessions).toHaveLength(1)
-    expect(store.sessions[0].event).toBe('333')
-    expect(store.activeId).toBe(store.sessions[0].id)
+    expect(store.sessions).toHaveLength(0)
+    expect(store.activeDiscipline).toBe('333')
+    expect(store.activeByDiscipline).toEqual({})
   })
 
   it('migrates pre-session data into one session per event', () => {
@@ -39,7 +42,7 @@ describe('loadStore', () => {
       ]),
     )
     const store = loadStore()
-    expect(store.sessions.map((s) => s.event)).toEqual(['333', '444'])
+    expect(store.sessions.map((s) => s.discipline)).toEqual(['333', '444'])
     expect(store.solves.every((s) => s.sessionId)).toBe(true)
     expect(store.solves.every((s) => s.scramble.length > 0)).toBe(true)
   })
@@ -55,10 +58,102 @@ describe('loadStore', () => {
     expect(store.solves[0].updatedAt).toBe(700)
   })
 
-  it('recovers from an active id pointing at a session that is gone', () => {
+  it('moves a pre-discipline session onto its event as a discipline key', () => {
+    // The old `event` value is already a valid single-event key, so the
+    // migration only moves the field -- nothing is rewritten.
+    seed([{ id: 's1', name: 'a', event: '444', createdAt: 1, updatedAt: 1 }], [])
+    expect(loadStore().sessions[0].discipline).toBe('444')
+  })
+
+  it('migrates the single old active id into a per-discipline pointer', () => {
+    seed(
+      [
+        { id: 's1', name: 'a', event: '333', createdAt: 1, updatedAt: 1 },
+        { id: 's2', name: 'b', event: '444', createdAt: 2, updatedAt: 2 },
+      ],
+      [],
+    )
+    mem.set('cube-timer.active-session.v1', 's2')
+    const store = loadStore()
+    expect(store.activeDiscipline).toBe('444')
+    expect(store.activeByDiscipline).toEqual({ '444': 's2' })
+  })
+
+  it('recovers from an old active id pointing at a session that is gone', () => {
     seed([{ id: 's1', name: 'a', event: '333', createdAt: 1, updatedAt: 1 }], [])
     mem.set('cube-timer.active-session.v1', 'missing')
-    expect(loadStore().activeId).toBe('s1')
+    const store = loadStore()
+    expect(store.activeDiscipline).toBe('333')
+    expect(activeSessionOf(store, '333')!.id).toBe('s1')
+  })
+
+  it('prefers stored discipline pointers over the legacy one', () => {
+    seed(
+      [
+        { id: 's1', name: 'a', discipline: '333', createdAt: 1, updatedAt: 1 },
+        { id: 's2', name: 'b', discipline: '222', createdAt: 2, updatedAt: 2 },
+      ],
+      [],
+    )
+    mem.set('cube-timer.active-session.v1', 's1')
+    mem.set('cube-timer.active-discipline.v1', '222')
+    mem.set('cube-timer.active-by-discipline.v1', JSON.stringify({ '222': 's2' }))
+    expect(loadStore().activeDiscipline).toBe('222')
+  })
+})
+
+describe('activeSessionOf', () => {
+  const store = () => {
+    seed(
+      [
+        { id: 's1', name: 'a', discipline: '333', createdAt: 1, updatedAt: 1 },
+        { id: 's2', name: 'b', discipline: '333', createdAt: 2, updatedAt: 2 },
+        { id: 's3', name: 'c', discipline: '444', createdAt: 3, updatedAt: 3 },
+      ],
+      [],
+    )
+    return loadStore()
+  }
+
+  it('restores the remembered session for that discipline', () => {
+    const s = { ...store(), activeByDiscipline: { '333': 's2' } }
+    expect(activeSessionOf(s, '333')!.id).toBe('s2')
+  })
+
+  it('falls back when the remembered id is not a live session of it', () => {
+    // 's3' is a real session -- of a DIFFERENT discipline. Returning it would
+    // time 4x4 solves into a 3x3 log.
+    const s = { ...store(), activeByDiscipline: { '333': 's3' } }
+    expect(activeSessionOf(s, '333')!.id).toBe('s1')
+  })
+
+  it('is undefined for a discipline with no sessions, so a draft takes over', () => {
+    expect(activeSessionOf(store(), '555')).toBeUndefined()
+  })
+})
+
+describe('commitDraft', () => {
+  const draft: Session = {
+    id: 'd1', name: '5x5 - Aug 24', discipline: '555', createdAt: 9, updatedAt: 9,
+  }
+  const solve: Solve = {
+    id: 'v1', sessionId: 'd1', scramble: 'R', timeMs: 90000,
+    penalty: 'none', createdAt: 9, updatedAt: 9,
+  }
+
+  it('writes the session and its first solve together', () => {
+    seed([], [])
+    const after = commitDraft(loadStore(), draft, solve)
+    expect(after.sessions.map((s) => s.id)).toEqual(['d1'])
+    expect(after.solves.map((s) => s.id)).toEqual(['v1'])
+    expect(after.solves[0].sessionId).toBe(after.sessions[0].id)
+  })
+
+  it('makes the committed session the active one for its discipline', () => {
+    seed([], [])
+    const after = commitDraft(loadStore(), draft, solve)
+    expect(after.activeDiscipline).toBe('555')
+    expect(activeSessionOf(after, '555')!.id).toBe('d1')
   })
 })
 
@@ -66,8 +161,8 @@ describe('deleteSession', () => {
   const two = () => {
     seed(
       [
-        { id: 's1', name: 'a', event: '333', createdAt: 1, updatedAt: 1 },
-        { id: 's2', name: 'b', event: '222', createdAt: 2, updatedAt: 2 },
+        { id: 's1', name: 'a', discipline: '333', createdAt: 1, updatedAt: 1 },
+        { id: 's2', name: 'b', discipline: '333', createdAt: 2, updatedAt: 2 },
       ],
       [
         { id: 'p', sessionId: 's1', scramble: '', timeMs: 1000, penalty: 'none', createdAt: 3, updatedAt: 3 },
@@ -90,12 +185,16 @@ describe('deleteSession', () => {
     expect(after.sessions.find((s) => s.id === 's1')!.updatedAt).toBeGreaterThan(1)
   })
 
-  it('moves the active session off the deleted one', () => {
-    expect(deleteSession(two(), 's1').activeId).toBe('s2')
+  it('moves the pointer to another session of the same discipline', () => {
+    const start = { ...two(), activeByDiscipline: { '333': 's1' } }
+    expect(deleteSession(start, 's1').activeByDiscipline).toEqual({ '333': 's2' })
   })
 
-  it('refuses to delete the last live session', () => {
+  it('drops the pointer when the discipline has no session left', () => {
+    // No longer refused: a draft takes over, so there is always somewhere to
+    // time into and no "last session" rule to explain.
     const after = deleteSession(deleteSession(two(), 's1'), 's2')
-    expect(after.sessions.filter((s) => !s.deleted)).toHaveLength(1)
+    expect(after.sessions.filter((s) => !s.deleted)).toHaveLength(0)
+    expect(after.activeByDiscipline).toEqual({})
   })
 })

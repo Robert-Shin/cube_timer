@@ -4,29 +4,40 @@ import {
   currentStreak,
   friendDaily,
   friendProfile,
+  friendSessions,
   type FriendDailyView,
   type FriendProfileView,
+  type FriendSessionView,
 } from './friends'
+import { disciplineLabel, parseDiscipline, soleEvent } from './discipline'
 import { FriendCalendar } from './FriendCalendar'
 import { formatMs } from './format'
 import { averageOf } from './stats'
-import { EVENTS, type EventId, type Solve } from './types'
+import type { Solve } from './types'
 
 const WEEKS = 12
 
+/**
+ * You pick between the friend's SESSIONS here, not between all 17 WCA events.
+ *
+ * The event picker this replaces existed only because the RPCs took an event
+ * and aggregated across every session the friend had for it -- so it asked a
+ * question the friend never organised their practice by, and offered 17
+ * choices of which they might have solves for two.
+ */
 export function FriendProfile({
   userId,
   username,
-  event,
-  onEventChange,
   onClose,
 }: {
   userId: string
   username: string
-  event: EventId
-  onEventChange: (event: EventId) => void
   onClose: () => void
 }) {
+  // null = loading, 'error' = the call failed, an array = success (possibly
+  // empty, which is a friend with no solves -- not an error).
+  const [sessions, setSessions] = useState<FriendSessionView[] | null | 'error'>(null)
+  const [sessionId, setSessionId] = useState<string | null>(null)
   // null = loading, 'error' = the call genuinely failed, an object = success
   // (possibly with total: 0, which is a normal empty state, not an error).
   const [view, setView] = useState<FriendProfileView | null | 'error'>(null)
@@ -37,8 +48,37 @@ export function FriendProfile({
   // into one calm state rather than an error).
   const [daily, setDaily] = useState<FriendDailyView | 'none' | null | 'error'>(null)
   // Bumped by the retry button to force the effects below to run again for
-  // the same userId/event.
+  // the same userId/session.
   const [attempt, setAttempt] = useState(0)
+
+  // Same staleness pattern as the two effects below. Selecting the first
+  // session here (rather than leaving it null) is what makes the profile
+  // land on something useful immediately: friend_sessions orders by most
+  // recent solve, so that is the log they are actually practising.
+  useEffect(() => {
+    let stale = false
+    setSessions(null)
+    setSessionId(null)
+    friendSessions(userId).then((v) => {
+      if (stale) return
+      setSessions(v ?? 'error')
+      if (v && v.length > 0) setSessionId(v[0].id)
+    })
+    return () => {
+      stale = true
+    }
+  }, [userId, attempt])
+
+  const chosen =
+    sessions === null || sessions === 'error'
+      ? undefined
+      : sessions.find((s) => s.id === sessionId)
+  // The daily challenge is per-EVENT, not per-session, so it needs the one
+  // event behind the chosen session's discipline -- and there isn't one for a
+  // relay, which is why the panel is omitted rather than guessing a leg.
+  const dailyEvent = chosen
+    ? soleEvent(parseDiscipline(chosen.discipline) ?? { kind: 'relay', events: [] })
+    : null
 
   // `stale` is local to each run of this effect, not a ref shared across
   // runs: switching friends or events while a fetch is in flight starts a
@@ -48,29 +88,31 @@ export function FriendProfile({
   // request's response can ever land. Unmounting mid-fetch runs the same
   // cleanup, so no state is written after unmount either.
   useEffect(() => {
+    if (!sessionId) return
     let stale = false
     setView(null)
-    friendProfile(userId, event, WEEKS * 7).then((v) => {
+    friendProfile(userId, sessionId, WEEKS * 7).then((v) => {
       if (!stale) setView(v ?? 'error')
     })
     return () => {
       stale = true
     }
-  }, [userId, event, attempt])
+  }, [userId, sessionId, attempt])
 
   // Separate effect, same staleness pattern: this call is independent of the
   // one above, so switching event/friend/retry must not let a slow response
   // from one land after a newer request for the other has already started.
   useEffect(() => {
+    if (!dailyEvent) return
     let stale = false
     setDaily(null)
-    friendDaily(userId, event).then((v) => {
+    friendDaily(userId, dailyEvent).then((v) => {
       if (!stale) setDaily(v === null ? 'error' : v)
     })
     return () => {
       stale = true
     }
-  }, [userId, event, attempt])
+  }, [userId, dailyEvent, attempt])
 
   // The friend's ao12 is computed by the SAME function that computes yours, so
   // the two can never disagree. averageOf only reads timeMs/penalty, so the
@@ -94,28 +136,41 @@ export function FriendProfile({
           </button>
         </div>
 
-        {/* Defaults to the viewer's own session event (via the `event` prop),
-            then is freely changeable -- otherwise a friend's 4x4 can only be
-            seen while the viewer is themselves on 4x4. Reuses the same
-            EVENTS list SessionManager/ImportDialog use for their event
-            pickers, so this never drifts from what the rest of the app
-            considers a choosable event. */}
-        <label className="ctrl">
-          Event
-          <select
-            value={event}
-            onChange={(e) => onEventChange(e.target.value as EventId)}
-            aria-label="Friend's event"
-          >
-            {EVENTS.map((ev) => (
-              <option key={ev.id} value={ev.id}>
-                {ev.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        {/* Their sessions, not a list of events. Each row carries its
+            discipline label as well as its name, so the puzzle is never
+            implicit in a name the viewer did not write. */}
+        {sessions === null ? (
+          <p className="note">Loading {username}&apos;s sessions…</p>
+        ) : sessions === 'error' ? (
+          <p className="error">
+            Could not load {username}&apos;s sessions.{' '}
+            <button className="link" onClick={() => setAttempt((n) => n + 1)}>
+              Try again.
+            </button>
+          </p>
+        ) : sessions.length === 0 ? (
+          <p className="empty">{username} has no solves yet.</p>
+        ) : (
+          <label className="ctrl">
+            Session
+            <select
+              value={sessionId ?? ''}
+              onChange={(e) => setSessionId(e.target.value)}
+              aria-label="Friend's session"
+            >
+              {sessions.map((s) => {
+                const d = parseDiscipline(s.discipline)
+                return (
+                  <option key={s.id} value={s.id}>
+                    {s.name} · {d ? disciplineLabel(d) : s.discipline} ({s.solves})
+                  </option>
+                )
+              })}
+            </select>
+          </label>
+        )}
 
-        {view === null ? (
+        {!sessionId ? null : view === null ? (
           <p className="note">Loading {username}…</p>
         ) : view === 'error' ? (
           <p className="error">
@@ -159,6 +214,9 @@ export function FriendProfile({
               </tbody>
             </table>
 
+            {/* Omitted entirely for a relay: there is no daily challenge for
+                one, so there is nothing to be loading or missing. */}
+            {dailyEvent && (
             <div className="friend-daily">
               {daily === null ? (
                 <p className="note">Loading today&apos;s result…</p>
@@ -177,9 +235,10 @@ export function FriendProfile({
                 </p>
               )}
             </div>
+            )}
 
             {view.total === 0 ? (
-              <p className="empty">No solves for this event yet.</p>
+              <p className="empty">No solves in this session yet.</p>
             ) : (
               <FriendCalendar days={view.days} weeks={WEEKS} />
             )}
