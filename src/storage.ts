@@ -1,5 +1,5 @@
 import { EVENTS, MAX_SESSIONS, eventName, type EventId, type Session, type Solve, type Synced } from './types'
-import { disciplineKey, disciplineLabel, eventDiscipline, parseDiscipline } from './discipline'
+import { disciplineKey, disciplineLabel, eventDiscipline, parseDiscipline, relayDiscipline } from './discipline'
 import { now, tombstone } from './sync/stamp'
 import { newestFirst } from './sync/merge'
 
@@ -244,5 +244,55 @@ export function deleteSession(store: Store, id: string): Store {
     sessions,
     solves: store.solves.map((s) => (s.sessionId === id ? tombstone(s) : s)),
     activeByDiscipline: next,
+  }
+}
+
+/**
+ * The relay disciplines that exist, newest-used first by session order.
+ *
+ * Relays are custom-only and have no record of their own: the set of relays
+ * IS the set of distinct relay keys among live sessions. Deleting a relay's
+ * last session is therefore what removes the relay from the picker.
+ */
+export function relayKeys(store: Store): string[] {
+  const seen = new Set<string>()
+  for (const s of store.sessions) {
+    if (s.deleted) continue
+    if (parseDiscipline(s.discipline)?.kind === 'relay') seen.add(s.discipline)
+  }
+  return [...seen]
+}
+
+/**
+ * Builds a relay and writes a session for it in one step.
+ *
+ * A real session, not a draft: the 17 events are permanently on offer so
+ * nothing is lost by declining to persist a draft for one, but a relay that
+ * existed only as a draft would vanish on reload and discard the work of
+ * building it.
+ *
+ * Legs are canonically ordered here rather than in the builder, so the order
+ * cannot depend on which checkbox was ticked first.
+ */
+export function createRelaySession(store: Store, events: EventId[]): Store {
+  const legs = EVENTS.map((e) => e.id).filter((id) => events.includes(id))
+  // A one-leg "relay" is just that event; an empty one is nothing at all.
+  if (legs.length < 2) return store
+  if (store.sessions.filter((s) => !s.deleted).length >= MAX_SESSIONS) return store
+
+  const key = disciplineKey(relayDiscipline(legs))
+  const at = now()
+  const session: Session = {
+    id: crypto.randomUUID(),
+    name: defaultSessionName(key, at),
+    discipline: key,
+    createdAt: at,
+    updatedAt: at,
+  }
+  return {
+    ...store,
+    sessions: [...store.sessions, session],
+    activeDiscipline: key,
+    activeByDiscipline: { ...store.activeByDiscipline, [key]: session.id },
   }
 }

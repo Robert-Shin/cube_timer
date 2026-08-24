@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { activeSessionOf, commitDraft, deleteSession, loadStore } from './storage'
+import { activeSessionOf, commitDraft, createRelaySession, deleteSession, loadStore, relayKeys } from './storage'
 import type { Session, Solve } from './types'
 
 const mem = new Map<string, string>()
@@ -196,5 +196,60 @@ describe('deleteSession', () => {
     const after = deleteSession(deleteSession(two(), 's1'), 's2')
     expect(after.sessions.filter((s) => !s.deleted)).toHaveLength(0)
     expect(after.activeByDiscipline).toEqual({})
+  })
+})
+
+describe('relayKeys', () => {
+  it('lists the distinct relay disciplines among live sessions', () => {
+    // Relays are custom-only and have no storage of their own: the relays
+    // that exist ARE the ones some live session uses.
+    seed(
+      [
+        { id: 's1', name: 'a', discipline: '333', createdAt: 1, updatedAt: 1 },
+        { id: 's2', name: 'b', discipline: 'relay:222+333', createdAt: 2, updatedAt: 2 },
+        { id: 's3', name: 'c', discipline: 'relay:222+333', createdAt: 3, updatedAt: 3 },
+      ],
+      [],
+    )
+    expect(relayKeys(loadStore())).toEqual(['relay:222+333'])
+  })
+
+  it('drops a relay whose sessions are all tombstoned', () => {
+    seed(
+      [{ id: 's1', name: 'a', discipline: 'relay:222+333', createdAt: 1, updatedAt: 1, deleted: true }],
+      [],
+    )
+    expect(relayKeys(loadStore())).toEqual([])
+  })
+})
+
+describe('createRelaySession', () => {
+  it('writes a real session immediately, not a draft', () => {
+    // Unlike the 17 events, a relay is not permanently on offer: if building
+    // one left only a draft, it would vanish on reload.
+    seed([], [])
+    const after = createRelaySession(loadStore(), ['333', '222'])
+    expect(after.sessions).toHaveLength(1)
+    expect(after.sessions[0].discipline).toBe('relay:222+333')
+  })
+
+  it('orders legs canonically, not in the order they were given', () => {
+    seed([], [])
+    const after = createRelaySession(loadStore(), ['555', '222', '333'])
+    expect(after.sessions[0].discipline).toBe('relay:222+333+555')
+  })
+
+  it('makes the new relay the active discipline', () => {
+    seed([], [])
+    const after = createRelaySession(loadStore(), ['222', '333'])
+    expect(after.activeDiscipline).toBe('relay:222+333')
+    expect(after.activeByDiscipline['relay:222+333']).toBe(after.sessions[0].id)
+  })
+
+  it('refuses a relay of fewer than two legs', () => {
+    seed([], [])
+    const store = loadStore()
+    expect(createRelaySession(store, ['333'])).toBe(store)
+    expect(createRelaySession(store, [])).toBe(store)
   })
 })
