@@ -274,7 +274,7 @@ export default function App() {
 
   /** Single path for recording a solve, whether timed or typed. */
   const record = useCallback(
-    (timeMs: number) => {
+    (timeMs: number, _splits: number[] = []) => {
       const id = crypto.randomUUID()
       const asking = settings.trackParity && hasParity(event)
       const solve: Solve = {
