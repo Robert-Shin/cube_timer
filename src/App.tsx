@@ -11,6 +11,7 @@ import {
 import {
   disciplineEvents,
   disciplineKey,
+  disciplineLabel,
   eventDiscipline,
   parseDiscipline,
   soleEvent,
@@ -22,8 +23,10 @@ import { newScrambles } from './scramble'
 import {
   activeSessionOf,
   commitDraft,
+  createRelaySession,
   defaultSessionName,
   loadStore,
+  relayKeys,
   save,
   type Store,
 } from './storage'
@@ -52,6 +55,7 @@ import { hasParity, parityTags, type ParityId } from './parity'
 import { StatsPane } from './StatsPane'
 import { suggestGoal } from './stats'
 import { DailyChallenge } from './DailyChallenge'
+import { RelayBuilder } from './RelayBuilder'
 
 export default function App() {
   const [store, setStore] = useState<Store>(() => loadStore())
@@ -71,6 +75,7 @@ export default function App() {
   const [toast, setToast] = useState('')
   const [showAuth, setShowAuth] = useState(false)
   const [showFriends, setShowFriends] = useState(false)
+  const [buildingRelay, setBuildingRelay] = useState(false)
   const [openFriend, setOpenFriend] = useState<{ id: string; name: string } | null>(null)
   // Solve awaiting a parity answer; it is already recorded, so a reload
   // during the prompt keeps the time and simply leaves parity unset.
@@ -130,11 +135,15 @@ export default function App() {
   )
   const legs = disciplineEvents(parsedDiscipline)
 
-  // The picker cannot reach a relay yet, so this is always the sole event in
-  // practice -- but for a relay it falls back to '333'. Every reader of
-  // `event` below that would misfire on that fallback (parity, the daily
-  // challenge) guards itself with `legs.length === 1` rather than trusting
-  // this value alone.
+  // Every relay in the store, offered in the discipline picker. Recomputed
+  // off the whole store (not just liveSessions) since relayKeys already
+  // skips tombstones itself.
+  const relays = useMemo(() => relayKeys(store), [store])
+
+  // The event a relay falls back to when it has no single sole event. Every
+  // reader of `event` below that would misfire on that fallback (parity, the
+  // daily challenge) guards itself with `legs.length === 1` rather than
+  // trusting this value alone.
   const event = soleEvent(parsedDiscipline) ?? '333'
 
   // Newest first, so stats windows are just slices from the front.
@@ -383,6 +392,7 @@ export default function App() {
     showSettings ||
     showAuth ||
     showFriends ||
+    buildingRelay ||
     pendingParity !== null
   const { state, display, leg } = useTimer(
     record,
@@ -520,9 +530,18 @@ export default function App() {
                 inside it. */}
             <select
               value={discipline}
-              onChange={(e) =>
+              onChange={(e) => {
+                // The sentinel opens the builder; it must never be written
+                // into activeDiscipline. Once the builder closes, `discipline`
+                // (still the last real value) is what this select renders
+                // again -- it never gets a chance to display the sentinel's
+                // label.
+                if (e.target.value === '__new_relay__') {
+                  setBuildingRelay(true)
+                  return
+                }
                 setStore((prev) => ({ ...prev, activeDiscipline: e.target.value }))
-              }
+              }}
               aria-label="Discipline"
             >
               {EVENTS.map((ev) => (
@@ -530,6 +549,15 @@ export default function App() {
                   {ev.name}
                 </option>
               ))}
+              {relays.map((key) => {
+                const d = parseDiscipline(key)
+                return (
+                  <option key={key} value={key}>
+                    {d ? disciplineLabel(d) : key}
+                  </option>
+                )
+              })}
+              <option value="__new_relay__">New relay…</option>
             </select>
             {/* Only when this discipline actually has more than one log --
                 otherwise the control is dead weight on every screen. */}
@@ -1008,6 +1036,19 @@ export default function App() {
           counts={counts}
           onChange={setStore}
           onClose={() => setShowSessions(false)}
+        />
+      )}
+      {buildingRelay && (
+        <RelayBuilder
+          onCreate={(events) => {
+            // createRelaySession returns the store unchanged if MAX_SESSIONS
+            // is already hit; the builder still closes either way, matching
+            // the picker's other creation flows, which give no separate
+            // "were you actually saved" feedback either.
+            setStore((prev) => createRelaySession(prev, events))
+            setBuildingRelay(false)
+          }}
+          onClose={() => setBuildingRelay(false)}
         />
       )}
       {importing && (
