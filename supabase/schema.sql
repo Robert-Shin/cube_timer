@@ -708,7 +708,10 @@ language sql stable security definer set search_path = public as $$
   order by s.created_at desc
   -- p_limit is attacker-controlled, so the ceiling is enforced here rather
   -- than trusted from the client: a caller asking for 10^9 rows gets 2000.
-  limit least(coalesce(p_limit, 2000), 2000);
+  -- greatest(0, ...) matters too: a negative p_limit would otherwise reach
+  -- `limit -1`, which Postgres rejects with 2201W -- a 500 to the caller
+  -- instead of an empty, harmless result.
+  limit greatest(0, least(coalesce(p_limit, 2000), 2000));
 $$;
 
 -- `revoke ... from public` alone would leave this callable by anyone holding

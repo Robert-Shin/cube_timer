@@ -975,7 +975,10 @@ try {
   await admin.from('solves').insert({
     id: randomUUID(), user_id: b.userId, session_id: friendSessionId,
     time_ms: friendSolveTimeMs, penalty: 'none',
-    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    // Backdated, not the second solve future-dated: no fixture row should
+    // claim to have happened in the future. friend_solves orders by
+    // created_at desc, so this one must sort after friendSolveTimeMs2 below.
+    created_at: new Date(Date.now() - 1000).toISOString(), updated_at: new Date().toISOString(),
   }).throwOnError()
 
   // A second session for b with no solves at all. friend_sessions must omit
@@ -1166,7 +1169,7 @@ try {
   await admin.from('solves').insert({
     id: randomUUID(), user_id: b.userId, session_id: friendSessionId,
     time_ms: friendSolveTimeMs2, penalty: 'plus2',
-    created_at: new Date(Date.now() + 1000).toISOString(),
+    created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }).throwOnError()
 
@@ -1201,15 +1204,6 @@ try {
     )
   })
 
-  // c has a PENDING request to b, not an accepted one. are_friends must
-  // require 'accepted' -- a request anyone can send is not consent.
-  await expectEmpty(
-    'friend_solves: a pending friend sees nothing',
-    c.client.rpc('friend_solves', {
-      p_user: b.userId, p_session: friendSessionId, p_limit: 100,
-    }),
-  )
-
   // expectPermissionDenied, not expectEmpty: friend_solves revokes EXECUTE
   // from anon, so an anonymous caller gets a bare 42501 and never reaches
   // the query at all. expectEmpty can't tell that apart from "the function
@@ -1224,7 +1218,26 @@ try {
 
   // The n.user_id = p_user clause. p_session is an unvalidated id from the
   // caller: a is a genuine friend of b, but names a session that is NOT
-  // b's. Without that clause the function would happily read it.
+  // b's -- sessionId belongs to a, not b, and holds only a's own solve, so
+  // s.user_id = p_user (b) already empties this with or without the
+  // n.user_id = p_user clause. That alone cannot turn the clause's removal
+  // red, so a deliberately inconsistent fixture is seeded below: a solve
+  // ROW OWNED BY b sitting inside a SESSION OWNED BY a. The application can
+  // never produce this state itself (every insert path ties a solve's
+  // session to its own owner), but nothing stops it existing in the
+  // database, and the clause exists precisely to defend against it as
+  // defence-in-depth: with the clause, zero rows; without it, the function
+  // would happily hand a this row of b's back. Safe to seed here -- nothing
+  // downstream counts rows by session_id = sessionId, only by solveId
+  // (`.eq('id', solveId)`) or session id (`.eq('id', sessionId)`), so this
+  // extra row cannot disturb any other assertion. Cascades away with b's
+  // account in the top-level cleanup, same as every other solve seeded for
+  // b.
+  await admin.from('solves').insert({
+    id: randomUUID(), user_id: b.userId, session_id: sessionId,
+    time_ms: 99999, penalty: 'none',
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  }).throwOnError()
   await expectEmpty(
     "friend_solves: a friend cannot read a session that is not the named user's",
     a.client.rpc('friend_solves', {
@@ -1232,13 +1245,33 @@ try {
     }),
   )
 
-  // p_limit is attacker-controlled; the ceiling is server-side.
-  await check('friend_solves: p_limit cannot exceed the server cap', async () => {
+  // p_limit is attacker-controlled; the ceiling is server-side. A two-row
+  // fixture can't actually exercise the 2000 cap -- both rows satisfy
+  // `<= 2000` whether or not `least(...)` is present, so that alone proves
+  // nothing. p_limit: 1 does have a real failure mode against these two
+  // rows: it goes red if `least`/LIMIT were removed entirely (2 rows come
+  // back) or if the ceiling were hardcoded to some value >= 2 instead of
+  // reading p_limit at all.
+  await check('friend_solves: p_limit is honoured, not just capped', async () => {
+    const { data, error } = await a.client.rpc('friend_solves', {
+      p_user: b.userId, p_session: friendSessionId, p_limit: 1,
+    })
+    assert(!error, `unexpected error ${error?.message}`)
+    assert((data ?? []).length === 1, `expected exactly 1 solve, got ${(data ?? []).length}`)
+  })
+
+  // This proves only that an oversized p_limit is accepted rather than
+  // erroring -- NOT that the 2000 ceiling itself holds. Seeding 2001+ rows
+  // to actually exercise that ceiling would mean a slow write against the
+  // live database on every future run, so the ceiling is left unexercised
+  // here; the assertion above is what catches a regression in how p_limit
+  // is honoured at all.
+  await check('friend_solves: an oversized p_limit is accepted rather than erroring', async () => {
     const { data, error } = await a.client.rpc('friend_solves', {
       p_user: b.userId, p_session: friendSessionId, p_limit: 1_000_000_000,
     })
     assert(!error, `unexpected error ${error?.message}`)
-    assert((data ?? []).length <= 2000, `expected at most 2000 rows, got ${(data ?? []).length}`)
+    assert((data ?? []).length === 2, `expected 2 solves, got ${(data ?? []).length}`)
   })
 
   // ------------------------------------ session/user pairing (p_session)
@@ -1479,6 +1512,20 @@ try {
     'friend_calendar: a pending request grants no access',
     c.client.rpc('friend_calendar', {
       p_user: b.userId, p_session: friendSessionId, p_since: '2000-01-01',
+    }),
+  )
+
+  // friend_solves' own pending-friend assertion lives HERE, not up in the
+  // main friend_solves block above: at that earlier point in the run c's
+  // only pending row was (a -> c), so c was merely a stranger to b and the
+  // assertion would have stayed green even if are_friends counted pending
+  // rows as friendship. The (b -> c) pending row seeded immediately above
+  // is what actually isolates the state = 'accepted' requirement -- c has a
+  // PENDING request to b, not an accepted one.
+  await expectEmpty(
+    'friend_solves: a pending friend sees nothing',
+    c.client.rpc('friend_solves', {
+      p_user: b.userId, p_session: friendSessionId, p_limit: 100,
     }),
   )
 
