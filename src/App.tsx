@@ -1,14 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { effectiveMs, EVENTS, MAX_SESSIONS, type EventId, type Penalty, type Session, type Solve } from './types'
 import {
+  effectiveMs,
+  eventName,
+  EVENTS,
+  MAX_SESSIONS,
+  type Penalty,
+  type Session,
+  type Solve,
+} from './types'
+import {
+  disciplineEvents,
   disciplineKey,
   eventDiscipline,
   parseDiscipline,
   soleEvent,
+  type Discipline,
 } from './discipline'
 import { formatMs, formatSolve } from './format'
 import { averageOf, best } from './stats'
-import { newScramble } from './scramble'
+import { newScrambles } from './scramble'
 import {
   activeSessionOf,
   commitDraft,
@@ -46,7 +56,7 @@ import { DailyChallenge } from './DailyChallenge'
 export default function App() {
   const [store, setStore] = useState<Store>(() => loadStore())
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
-  const [scramble, setScramble] = useState('')
+  const [scrambles, setScrambles] = useState<string[]>([])
   const [scrambling, setScrambling] = useState(true)
   const [typed, setTyped] = useState('')
   const [tab, setTab] = useState<'timer' | 'stats' | 'daily'>('timer')
@@ -114,11 +124,18 @@ export default function App() {
     [liveSessions, discipline],
   )
 
-  // Relays are not offered yet, so every live discipline is single-event.
-  // When they ship, this is the seam that has to learn to produce N
-  // scrambles -- soleEvent returns null there rather than silently taking
-  // the first leg.
-  const event = soleEvent(parseDiscipline(discipline) ?? eventDiscipline('333')) ?? '333'
+  const parsedDiscipline = useMemo(
+    () => parseDiscipline(discipline) ?? eventDiscipline('333'),
+    [discipline],
+  )
+  const legs = disciplineEvents(parsedDiscipline)
+
+  // The picker cannot reach a relay yet, so this is always the sole event in
+  // practice -- but for a relay it falls back to '333'. Every reader of
+  // `event` below that would misfire on that fallback (parity, the daily
+  // challenge) guards itself with `legs.length === 1` rather than trusting
+  // this value alone.
+  const event = soleEvent(parsedDiscipline) ?? '333'
 
   // Newest first, so stats windows are just slices from the front.
   const solves = useMemo(
@@ -262,25 +279,35 @@ export default function App() {
     setTimeout(() => setToast(''), 4000)
   }
 
-  const nextScramble = useCallback((eventId: EventId) => {
+  const nextScramble = useCallback((d: Discipline) => {
     setScrambling(true)
-    newScramble(eventId)
-      .then(setScramble)
-      .catch(() => setScramble('scramble failed to generate'))
+    newScrambles(d)
+      .then(setScrambles)
+      .catch(() => setScrambles(['scramble failed to generate']))
       .finally(() => setScrambling(false))
   }, [])
 
-  useEffect(() => nextScramble(event), [event, nextScramble])
+  useEffect(() => nextScramble(parsedDiscipline), [parsedDiscipline, nextScramble])
+
+  // Splits are collected only when the setting is on AND the discipline is
+  // actually a relay -- a single-event solve never grows a boundaries array.
+  const trackingSplits = settings.trackSplits && legs.length > 1
+  // N-1 boundaries for N legs; the final stop is the solve's own timeMs.
+  const boundaries = trackingSplits ? legs.length - 1 : 0
 
   /** Single path for recording a solve, whether timed or typed. */
   const record = useCallback(
-    (timeMs: number, _splits: number[] = []) => {
+    (timeMs: number, splits: number[] = []) => {
       const id = crypto.randomUUID()
-      const asking = settings.trackParity && hasParity(event)
+      // legs.length === 1 is the guard, NOT hasParity(event): `event` is the
+      // '333' fallback for a relay, so hasParity would say true.
+      const asking = settings.trackParity && legs.length === 1 && hasParity(event)
       const solve: Solve = {
         id,
         sessionId: session.id,
-        scramble,
+        // Legs newline-joined; their order is recoverable from the session's
+        // discipline, so this needs no extra column.
+        scramble: scrambles.join('\n'),
         timeMs,
         penalty: 'none' as Penalty,
         createdAt: Date.now(),
@@ -288,6 +315,9 @@ export default function App() {
         // Events without parity record [] -- definitively none, not
         // unknown -- so they never show up as untracked.
         ...(asking ? {} : { parity: [] as ParityId[] }),
+        // undefined, not [], when untracked -- the distinction the column
+        // and legDurations both depend on.
+        ...(trackingSplits ? { splits } : {}),
       }
       // A draft session becomes real here, written in the same update as the
       // solve that justifies it. The solve already carries the draft's id, so
@@ -298,9 +328,9 @@ export default function App() {
           : { ...prev, solves: [solve, ...prev.solves] },
       )
       if (asking) setPendingParity(id)
-      nextScramble(event)
+      nextScramble(parsedDiscipline)
     },
-    [session, isDraft, event, scramble, nextScramble, settings.trackParity],
+    [session, isDraft, event, scrambles, trackingSplits, parsedDiscipline, nextScramble, settings.trackParity],
   )
 
   const typing = settings.inputMode === 'typing'
@@ -313,7 +343,11 @@ export default function App() {
     showAuth ||
     showFriends ||
     pendingParity !== null
-  const { state, display } = useTimer(record, tab === 'timer' && !typing && !modalOpen)
+  const { state, display, leg } = useTimer(
+    record,
+    tab === 'timer' && !typing && !modalOpen,
+    boundaries,
+  )
 
   const submitTyped = (e: React.FormEvent) => {
     e.preventDefault()
@@ -570,6 +604,21 @@ export default function App() {
 
           <div className="setting">
             <div>
+              <strong>Split tracking</strong>
+              <p>Tap between puzzles in a relay to record per-leg splits.</p>
+            </div>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={settings.trackSplits}
+                onChange={(e) => update('trackSplits', e.target.checked)}
+              />
+              <span />
+            </label>
+          </div>
+
+          <div className="setting">
+            <div>
               <strong>Background</strong>
               <p>
                 A photo behind the timer. Stored on this device only, never synced. The dim keeps
@@ -646,12 +695,21 @@ export default function App() {
         >
           {tab === 'timer' ? (
             <>
-              <p className="scramble dimmable">
-                {scrambling ? 'Generating scramble…' : scramble}
-                <button className="ghost small refresh" onClick={() => nextScramble(event)}>
+              <div className="scramble dimmable">
+                {scrambling ? (
+                  <p>Generating scramble…</p>
+                ) : (
+                  scrambles.map((text, i) => (
+                    <p key={i} className="scramble-leg">
+                      {legs.length > 1 && <span className="leg-label">{eventName(legs[i])}</span>}
+                      {text}
+                    </p>
+                  ))
+                )}
+                <button className="ghost small refresh" onClick={() => nextScramble(parsedDiscipline)}>
                   ↻
                 </button>
-              </p>
+              </div>
 
               {typing ? (
                 <form className="typed dimmable" onSubmit={submitTyped}>
@@ -672,6 +730,11 @@ export default function App() {
                 <div className="timer">
                   {settings.hideTimeWhileSolving && state === 'running' ? 'solving' : formatMs(display)}
                 </div>
+              )}
+              {trackingSplits && state === 'running' && (
+                <p className="note">
+                  Leg {leg + 1} of {legs.length}
+                </p>
               )}
               <p className="hint dimmable">
                 {typing
@@ -770,7 +833,7 @@ export default function App() {
             <PracticeCalendar solves={calendarScope === 'all' ? liveSolves : solves} />
           </section>
 
-          {parityEvent && (
+          {legs.length === 1 && parityEvent && (
             <section className="panel">
               <div className="panel-head">
                 <h2>Cost of parity</h2>
@@ -779,6 +842,10 @@ export default function App() {
             </section>
           )}
         </div>
+          ) : legs.length > 1 ? (
+            <p className="empty">
+              There is no daily challenge for a relay. Pick a single puzzle to take part.
+            </p>
           ) : (
             <DailyChallenge
               // Remounted per event: reveal/result live in DailyChallenge's
@@ -904,7 +971,7 @@ export default function App() {
           onClose={() => setDetailId(null)}
         />
       )}
-      {pending && (
+      {pending && legs.length === 1 && (
         <ParityPrompt
           event={event}
           timeMs={pending.timeMs}

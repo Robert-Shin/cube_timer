@@ -261,6 +261,29 @@ button.link:focus-visible { outline: 2px solid var(--text); outline-offset: 2px;
   color: var(--text);
   min-height: 2.5em;
 }
+/* .scramble now wraps one <p class="scramble-leg"> per leg (plus the
+   trailing refresh button) instead of being a <p> itself -- the block
+   children still inherit its centering and font, so only the per-leg
+   spacing and the label need their own rules. */
+.scramble-leg {
+  margin: 0 0 var(--sp-2);
+}
+.scramble-leg:last-of-type {
+  margin-bottom: 0;
+}
+/* Distinguished from the scramble moves by weight and case, not colour
+   alone, and switched off the monospace face so it reads as a label rather
+   than more move notation. */
+.leg-label {
+  display: block;
+  font-family: system-ui, sans-serif;
+  font-size: 0.7em;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 2px;
+}
 
 .timer {
   text-align: center;

@@ -8,6 +8,8 @@ export interface Settings {
   hideTimeWhileSolving: boolean
   /** Ask which parities occurred after each solve, on events that have them. */
   trackParity: boolean
+  /** Tap between puzzles in a relay to record per-leg splits. */
+  trackSplits: boolean
   /** 'system' follows the OS; the others override it in both directions. */
   theme: Theme
   /**
@@ -21,6 +23,7 @@ export const DEFAULT_SETTINGS: Settings = {
   inputMode: 'timer',
   hideTimeWhileSolving: false,
   trackParity: false,
+  trackSplits: false,
   theme: 'system',
   backgroundDim: 0.6,
 }
