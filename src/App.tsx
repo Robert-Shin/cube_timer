@@ -49,7 +49,7 @@ import { SolveDetail } from './SolveDetail'
 import { ParityPrompt } from './ParityPrompt'
 import { hasParity, type ParityId } from './parity'
 import { StatsPane } from './StatsPane'
-import { StatsView } from './StatsView'
+import { StatsView, useStatsViewState } from './StatsView'
 import { SolveList } from './SolveList'
 import { suggestGoal } from './stats'
 import { DailyChallenge } from './DailyChallenge'
@@ -483,10 +483,15 @@ export default function App() {
   // useful before anyone opens the session manager.
   const goal = session.goalMs ?? suggestGoal(solves)
   const parityEvent = hasParity(event)
-  // Same `legs.length === 1` guard the recording path uses, and for the same
-  // reason: `event` is the '333' fallback on a relay, so hasParity alone
-  // would claim a relay's solves have parity worth splitting or costing out.
+  // Defence in depth, not a correction: `event` is the '333' fallback on a
+  // relay, and 3x3 has no parity, so parityEvent is already false there. The
+  // guard says outright that the parity panels are for a single event, rather
+  // than leaving that resting on which event the fallback happens to be.
   const showParityPanels = legs.length === 1 && parityEvent
+  // Held here, above the tab ternary that renders StatsView, so switching to
+  // the timer and back does not silently reset the bucket, window, band and
+  // calendar scope -- which is where they lived before StatsView existed.
+  const statsState = useStatsViewState(session.id)
   // Tags only make sense while tracking is on: with it off, older solves would
   // keep showing parity that new solves silently never record.
   const showParityTags = settings.trackParity && parityEvent
@@ -896,7 +901,7 @@ export default function App() {
               title={session.name}
               event={event}
               showParity={showParityPanels}
-              resetKey={session.id}
+              state={statsState}
             />
           ) : legs.length > 1 ? (
             <p className="empty">

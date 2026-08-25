@@ -7,6 +7,64 @@ import { TrendChart } from './charts/TrendChart'
 import { ParityBreakdown } from './ParityBreakdown'
 
 /**
+ * How the panels below are set up to draw: the four view choices plus the
+ * bucket width.
+ *
+ * Held by the PARENT, not by StatsView, because StatsView is rendered inside
+ * a tab ternary and unmounts whenever another tab is shown. Owning this state
+ * itself would silently throw away a hand-picked bucket, a changed rolling
+ * window, an unticked band and the calendar scope on every visit to the timer.
+ * Each parent calls useStatsViewState() at its own level, so App's copy
+ * outlives the tab switch and a friend's page still gets an independent one.
+ */
+export interface StatsViewState {
+  bucketChoice: number | null
+  setBucketChoice: (ms: number) => void
+  distSplit: boolean
+  setDistSplit: (v: boolean) => void
+  rollWindow: number
+  setRollWindow: (n: number) => void
+  showBand: boolean
+  setShowBand: (v: boolean) => void
+  calendarScope: 'session' | 'all'
+  setCalendarScope: (s: 'session' | 'all') => void
+}
+
+/**
+ * `resetKey` identifies the set of solves being shown -- App passes the
+ * session id, NOT its name: renaming a session must not throw away a width
+ * chosen by hand.
+ */
+export function useStatsViewState(resetKey: string): StatsViewState {
+  // null = follow the data's spread (see suggestBucket). A width chosen by
+  // hand sticks until the session changes, at which point the spread it was
+  // chosen for is gone and auto takes over again.
+  const [bucketChoice, setBucketChoice] = useState<number | null>(null)
+  // Distribution view on events that have parity: one curve for every solve,
+  // or one per parity category overlaid. Ignored on events without parity,
+  // where there is only ever one curve to draw.
+  const [distSplit, setDistSplit] = useState(true)
+  const [rollWindow, setRollWindow] = useState(50)
+  const [showBand, setShowBand] = useState(true)
+  const [calendarScope, setCalendarScope] = useState<'session' | 'all'>('session')
+
+  useEffect(() => setBucketChoice(null), [resetKey])
+
+  return {
+    bucketChoice,
+    setBucketChoice,
+    distSplit,
+    setDistSplit,
+    rollWindow,
+    setRollWindow,
+    showBand,
+    setShowBand,
+    calendarScope,
+    setCalendarScope,
+  }
+}
+
+/**
  * The stats tab for one set of solves: distribution, improvement over time,
  * practice calendar, and -- on events that have parity -- its cost.
  *
@@ -21,33 +79,29 @@ export function StatsView({
   title,
   event,
   showParity,
-  resetKey,
+  state,
 }: {
   solves: Solve[]
   calendarSolves: Solve[]
   title: string
   event: EventId
   showParity: boolean
-  resetKey: string
+  state: StatsViewState
 }) {
-  // null = follow the data's spread (see suggestBucket). A width chosen by
-  // hand sticks until the session changes, at which point the spread it was
-  // chosen for is gone and auto takes over again.
-  const [bucketChoice, setBucketChoice] = useState<number | null>(null)
-  // Distribution view on events that have parity: one curve for every solve,
-  // or one per parity category overlaid. Ignored on events without parity,
-  // where there is only ever one curve to draw.
-  const [distSplit, setDistSplit] = useState(true)
-  const [rollWindow, setRollWindow] = useState(50)
-  const [showBand, setShowBand] = useState(true)
-  const [calendarScope, setCalendarScope] = useState<'session' | 'all'>('session')
+  const {
+    bucketChoice,
+    setBucketChoice,
+    distSplit,
+    setDistSplit,
+    rollWindow,
+    setRollWindow,
+    showBand,
+    setShowBand,
+    calendarScope,
+    setCalendarScope,
+  } = state
 
   const bucketMs = useMemo(() => bucketChoice ?? suggestBucket(solves), [bucketChoice, solves])
-  // Keyed on the caller's identity for this set of solves (the session id,
-  // not its name -- renaming a session must not throw away a hand-picked
-  // width), so the auto width above takes over again on a real change of
-  // data.
-  useEffect(() => setBucketChoice(null), [resetKey])
 
   return (
     <div className="stats-view dimmable">
