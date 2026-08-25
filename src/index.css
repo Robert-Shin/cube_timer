@@ -474,6 +474,8 @@ button.link:focus-visible { outline: 2px solid var(--text); outline-offset: 2px;
   cursor: pointer;
 }
 .solve-open:hover { background: none; }
+/* The read-only row (SolveList without onOpen): same box, nothing to click. */
+.solve-open.static { cursor: default; }
 .solves .idx {
   color: var(--dim);
   width: 26px;

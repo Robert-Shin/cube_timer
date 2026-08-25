@@ -17,7 +17,6 @@ import {
   soleEvent,
   type Discipline,
 } from './discipline'
-import { BUCKET_OPTIONS, suggestBucket } from './analysis'
 import { formatMs, formatSolve } from './format'
 import { averageOf, best } from './stats'
 import { newScrambles } from './scramble'
@@ -44,16 +43,14 @@ import { FriendProfile } from './FriendProfile'
 import { claimUsername, setOptIn, shouldClaimUsername, useProfile } from './profile'
 import { hasSubmittedToday } from './dailyClient'
 import { syncConfigured } from './supabase'
-import { Histogram } from './charts/Histogram'
-import { PracticeCalendar } from './charts/PracticeCalendar'
-import { TrendChart } from './charts/TrendChart'
 import { ImportDialog } from './ImportDialog'
 import { SessionManager } from './SessionManager'
 import { SolveDetail } from './SolveDetail'
 import { ParityPrompt } from './ParityPrompt'
-import { ParityBreakdown } from './ParityBreakdown'
-import { hasParity, parityTags, type ParityId } from './parity'
+import { hasParity, type ParityId } from './parity'
 import { StatsPane } from './StatsPane'
+import { StatsView } from './StatsView'
+import { SolveList } from './SolveList'
 import { suggestGoal } from './stats'
 import { DailyChallenge } from './DailyChallenge'
 import { RelayBuilder } from './RelayBuilder'
@@ -69,17 +66,6 @@ export default function App() {
   const [showSessions, setShowSessions] = useState(false)
   const [importing, setImporting] = useState(false)
   const [detailId, setDetailId] = useState<string | null>(null)
-  // null = follow the data's spread (see suggestBucket). A width chosen by
-  // hand sticks until the session changes, at which point the spread it was
-  // chosen for is gone and auto takes over again.
-  const [bucketChoice, setBucketChoice] = useState<number | null>(null)
-  // Distribution view on events that have parity: one curve for every solve,
-  // or one per parity category overlaid. Ignored on events without parity,
-  // where there is only ever one curve to draw.
-  const [distSplit, setDistSplit] = useState(true)
-  const [rollWindow, setRollWindow] = useState(50)
-  const [showBand, setShowBand] = useState(true)
-  const [calendarScope, setCalendarScope] = useState<'session' | 'all'>('session')
   const [toast, setToast] = useState('')
   const [showAuth, setShowAuth] = useState(false)
   const [showFriends, setShowFriends] = useState(false)
@@ -497,8 +483,10 @@ export default function App() {
   // useful before anyone opens the session manager.
   const goal = session.goalMs ?? suggestGoal(solves)
   const parityEvent = hasParity(event)
-  const bucketMs = useMemo(() => bucketChoice ?? suggestBucket(solves), [bucketChoice, solves])
-  useEffect(() => setBucketChoice(null), [session.id])
+  // Same `legs.length === 1` guard the recording path uses, and for the same
+  // reason: `event` is the '333' fallback on a relay, so hasParity alone
+  // would claim a relay's solves have parity worth splitting or costing out.
+  const showParityPanels = legs.length === 1 && parityEvent
   // Tags only make sense while tracking is on: with it off, older solves would
   // keep showing parity that new solves silently never record.
   const showParityTags = settings.trackParity && parityEvent
@@ -902,107 +890,14 @@ export default function App() {
               </div>
             </>
           ) : tab === 'stats' ? (
-        <div className="stats-view dimmable">
-          <section className="panel">
-            <div className="panel-head">
-              <h2>Distribution · {session.name}</h2>
-              <div className="ctrl-group">
-                {parityEvent && (
-                  <div className="seg">
-                    <button
-                      className={!distSplit ? 'active' : ''}
-                      onClick={() => setDistSplit(false)}
-                    >
-                      All solves
-                    </button>
-                    <button
-                      className={distSplit ? 'active' : ''}
-                      onClick={() => setDistSplit(true)}
-                    >
-                      By parity
-                    </button>
-                  </div>
-                )}
-                <label className="ctrl">
-                  Bucket
-                  <select
-                    value={bucketMs}
-                    onChange={(e) => setBucketChoice(Number(e.target.value))}
-                  >
-                    {BUCKET_OPTIONS.map((ms) => (
-                      <option key={ms} value={ms}>
-                        {BUCKET_LABELS[ms]}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            </div>
-            <Histogram
+            <StatsView
               solves={solves}
-              bucketMs={bucketMs}
-              splitByParity={parityEvent && distSplit}
+              calendarSolves={liveSolves}
+              title={session.name}
               event={event}
+              showParity={showParityPanels}
+              resetKey={session.id}
             />
-          </section>
-
-          <section className="panel">
-            <div className="panel-head">
-              <h2>Improvement over time</h2>
-              <div className="ctrl-group">
-                <label className="ctrl">
-                  <input
-                    type="checkbox"
-                    checked={showBand}
-                    onChange={(e) => setShowBand(e.target.checked)}
-                  />
-                  Percentile band
-                </label>
-                <label className="ctrl">
-                  Window
-                  <select value={rollWindow} onChange={(e) => setRollWindow(Number(e.target.value))}>
-                    <option value={5}>5</option>
-                    <option value={12}>12</option>
-                    <option value={50}>50</option>
-                    <option value={100}>100</option>
-                    <option value={500}>500</option>
-                  </select>
-                </label>
-              </div>
-            </div>
-            <TrendChart solves={solves} window={rollWindow} showBand={showBand} />
-          </section>
-
-          <section className="panel">
-            <div className="panel-head">
-              <h2>Practice</h2>
-              <div className="seg">
-                <button
-                  className={calendarScope === 'session' ? 'active' : ''}
-                  onClick={() => setCalendarScope('session')}
-                >
-                  This session
-                </button>
-                <button
-                  className={calendarScope === 'all' ? 'active' : ''}
-                  onClick={() => setCalendarScope('all')}
-                >
-                  All sessions
-                </button>
-              </div>
-            </div>
-            <PracticeCalendar solves={calendarScope === 'all' ? liveSolves : solves} />
-          </section>
-
-          {legs.length === 1 && parityEvent && (
-            <section className="panel">
-              <div className="panel-head">
-                <h2>Cost of parity</h2>
-              </div>
-              <ParityBreakdown solves={solves} event={event} />
-            </section>
-          )}
-        </div>
           ) : legs.length > 1 ? (
             <p className="empty">
               There is no daily challenge for a relay. Pick a single puzzle to take part.
@@ -1050,52 +945,17 @@ export default function App() {
           )}
         </section>
 
-        <aside className="pane pane-right dimmable">
-          <div className="panel-head">
-            <h2>Solves</h2>
-            {solves.length > 0 && (
-              <button className="ghost small" onClick={clearSession}>
-                Clear
-              </button>
-            )}
-          </div>
-          {solves.length === 0 && <p className="empty">No solves yet</p>}
-          <ol className="solves">
-            {solves.map((s, i) => (
-              <li
-                key={s.id}
-                className={`${s.id === latest?.id ? 'latest' : ''} ${s.id === pbId ? 'pb' : ''}`}
-              >
-                <button className="solve-open" onClick={() => setDetailId(s.id)}>
-                  <span className="idx">{solves.length - i}.</span>
-                  <span className="time">{formatSolve(s)}</span>
-                  {s.id === pbId && solves.length > 1 && <span className="tag pb-tag">PB</span>}
-                </button>
-                {showParityTags &&
-                  parityTags(event, s.parity).map((t) => (
-                    <span key={t.id} className={`tag parity-tag p-${t.id}`} title={t.title}>
-                      {t.label}
-                    </span>
-                  ))}
-                <span className="actions">
-                  <button
-                    className={s.penalty === 'plus2' ? 'on' : ''}
-                    onClick={() => setPenalty(s.id, s.penalty === 'plus2' ? 'none' : 'plus2')}
-                  >
-                    +2
-                  </button>
-                  <button
-                    className={s.penalty === 'dnf' ? 'on' : ''}
-                    onClick={() => setPenalty(s.id, s.penalty === 'dnf' ? 'none' : 'dnf')}
-                  >
-                    DNF
-                  </button>
-                  <button className="del" onClick={() => deleteSolve(s.id)}>×</button>
-                </span>
-              </li>
-            ))}
-          </ol>
-        </aside>
+        <SolveList
+          solves={solves}
+          event={event}
+          pbId={pbId}
+          latestId={latest?.id ?? null}
+          showParityTags={showParityTags}
+          onOpen={setDetailId}
+          onPenalty={setPenalty}
+          onDelete={deleteSolve}
+          onClear={clearSession}
+        />
       </main>
 
       {showSessions && (
@@ -1243,13 +1103,4 @@ function fmt(v: number | null | undefined): string {
  */
 function fmtStat(v: number | null | undefined): string {
   return v == null ? '—' : formatMs(v)
-}
-
-/** Bucket widths as they read in the picker. */
-const BUCKET_LABELS: Record<number, string> = {
-  50: '0.05s',
-  100: '0.1s',
-  250: '0.25s',
-  500: '0.5s',
-  1000: '1s',
 }
