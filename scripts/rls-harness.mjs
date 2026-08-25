@@ -272,6 +272,13 @@ const REQUIRED_FUNCTIONS = [
   { name: 'friend_stats', args: { p_user: '00000000-0000-0000-0000-000000000000', p_session: '00000000-0000-0000-0000-000000000000' } },
   { name: 'friend_daily', args: { p_user: '00000000-0000-0000-0000-000000000000', p_event: '__preflight_probe__' } },
   { name: 'friend_sessions', args: { p_user: '00000000-0000-0000-0000-000000000000' } },
+  // Probed with a random uuid: are_friends is false for it, so this returns
+  // zero rows rather than touching anyone's data.
+  { name: 'friend_solves', args: {
+      p_user: '00000000-0000-0000-0000-000000000000',
+      p_session: '00000000-0000-0000-0000-000000000000',
+      p_limit: 10,
+    } },
 ]
 for (const { name, args } of REQUIRED_FUNCTIONS) {
   const { error } = await admin.rpc(name, args)
@@ -1005,11 +1012,13 @@ try {
   // The value assertions above read named fields (`solves`, `day_best`) and
   // never enumerate the row's keys, so they pass just as well if a future
   // edit adds an extra column alongside them -- e.g. `s.id as solve_id` or
-  // `s.session_id` picked up while refactoring the query. This project's
-  // entire premise is that friends see aggregates and never raw solve rows,
-  // so assert on the exact COLUMN SET, not a sampled value: a row that
-  // happens to lack a scramble or solve id proves nothing about a row that
-  // has one.
+  // `s.session_id` picked up while refactoring the query. A friend sees the
+  // times and penalties of solves in a session, ordered but not timestamped
+  // (see friend_solves below). A friend never sees a scramble, a solve id,
+  // a session id, or the clock time of a solve. These two functions predate
+  // that and remain strictly aggregate, so assert on the exact COLUMN SET
+  // rather than a sampled value: a value assertion reads named fields and
+  // would not notice a scramble or solve id riding alongside them.
   await check('friend_calendar: the row exposes no solve/scramble/session id', async () => {
     const { data, error } = await a.client.rpc('friend_calendar', {
       p_user: b.userId, p_session: friendSessionId, p_since: '2000-01-01',
@@ -1104,8 +1113,13 @@ try {
 
   // Same reasoning as the column-set assertions above: the value checks read
   // named fields and would not notice a solve id, scramble, or goal riding
-  // alongside them. This project's premise is that friends see aggregates
-  // and never raw solve rows -- assert the exact column set.
+  // alongside them. A friend sees the times and penalties of solves in a
+  // session, ordered but not timestamped (see friend_solves below). A
+  // friend never sees a scramble, a solve id, a session id, or the clock
+  // time of a solve. These two functions predate that and remain strictly
+  // aggregate, so assert on the exact COLUMN SET rather than a sampled
+  // value: a value assertion reads named fields and would not notice a
+  // scramble or solve id riding alongside them.
   await check('friend_sessions: the row exposes no solve/scramble/goal column', async () => {
     const { data, error } = await a.client.rpc('friend_sessions', { p_user: b.userId })
     assert(!error, `unexpected error ${error?.message}`)
@@ -1136,6 +1150,91 @@ try {
     'friend_sessions: anon cannot execute the function at all (permission denied, not a filtered-empty result)',
     anon.rpc('friend_sessions', { p_user: b.userId }),
   )
+
+  // ------------------------------------------------------- friend_solves
+  //
+  // The first function that returns SOLVE ROWS rather than aggregates. Same
+  // security-definer posture and the same are_friends boundary as the four
+  // above: RLS does not apply inside it, so that check is the entire
+  // boundary between "b's solve log" and "anyone holding the public anon
+  // key".
+
+  // A second solve for b, so ordering and the row count are observable at
+  // all -- with one row, "newest first" and "oldest first" are the same
+  // answer and a broken ORDER BY would pass.
+  const friendSolveTimeMs2 = 23456
+  await admin.from('solves').insert({
+    id: randomUUID(), user_id: b.userId, session_id: friendSessionId,
+    time_ms: friendSolveTimeMs2, penalty: 'plus2',
+    created_at: new Date(Date.now() + 1000).toISOString(),
+    updated_at: new Date().toISOString(),
+  }).throwOnError()
+
+  // Positive control FIRST. Every expectEmpty below passes just as well if
+  // the fixture were never seeded or the rows were marked deleted; only
+  // once a genuine accepted friend gets the real times back does "a
+  // stranger gets nothing" mean "are_friends blocked it".
+  await check('friend_solves: an accepted friend sees the solves, newest first', async () => {
+    const { data, error } = await a.client.rpc('friend_solves', {
+      p_user: b.userId, p_session: friendSessionId, p_limit: 100,
+    })
+    assert(!error, `unexpected error ${error?.message}`)
+    assert((data ?? []).length === 2, `expected 2 solves, got ${(data ?? []).length}`)
+    assert(data[0].time_ms === friendSolveTimeMs2, `expected newest first (${friendSolveTimeMs2}), got ${data[0].time_ms}`)
+    assert(data[0].penalty === 'plus2', `expected penalty plus2, got ${data[0].penalty}`)
+    assert(data[1].time_ms === friendSolveTimeMs, `expected oldest last (${friendSolveTimeMs}), got ${data[1].time_ms}`)
+  })
+
+  // The value assertions above read named fields and would not notice a
+  // scramble, a solve id, or created_at riding alongside them. The exact
+  // column set IS the boundary this function promises.
+  await check('friend_solves: the row exposes no scramble, id, or clock time', async () => {
+    const { data, error } = await a.client.rpc('friend_solves', {
+      p_user: b.userId, p_session: friendSessionId, p_limit: 100,
+    })
+    assert(!error, `unexpected error ${error?.message}`)
+    const keys = Object.keys(data[0]).sort()
+    const expected = ['day', 'penalty', 'time_ms']
+    assert(
+      JSON.stringify(keys) === JSON.stringify(expected),
+      `expected exactly columns ${JSON.stringify(expected)}, got ${JSON.stringify(keys)}`,
+    )
+  })
+
+  // c has a PENDING request to b, not an accepted one. are_friends must
+  // require 'accepted' -- a request anyone can send is not consent.
+  await expectEmpty(
+    'friend_solves: a pending friend sees nothing',
+    c.client.rpc('friend_solves', {
+      p_user: b.userId, p_session: friendSessionId, p_limit: 100,
+    }),
+  )
+
+  await expectEmpty(
+    'friend_solves: an anonymous caller sees nothing',
+    anon.rpc('friend_solves', {
+      p_user: b.userId, p_session: friendSessionId, p_limit: 100,
+    }),
+  )
+
+  // The n.user_id = p_user clause. p_session is an unvalidated id from the
+  // caller: a is a genuine friend of b, but names a session that is NOT
+  // b's. Without that clause the function would happily read it.
+  await expectEmpty(
+    "friend_solves: a friend cannot read a session that is not the named user's",
+    a.client.rpc('friend_solves', {
+      p_user: b.userId, p_session: sessionId, p_limit: 100,
+    }),
+  )
+
+  // p_limit is attacker-controlled; the ceiling is server-side.
+  await check('friend_solves: p_limit cannot exceed the server cap', async () => {
+    const { data, error } = await a.client.rpc('friend_solves', {
+      p_user: b.userId, p_session: friendSessionId, p_limit: 1_000_000_000,
+    })
+    assert(!error, `unexpected error ${error?.message}`)
+    assert((data ?? []).length <= 2000, `expected at most 2000 rows, got ${(data ?? []).length}`)
+  })
 
   // ------------------------------------ session/user pairing (p_session)
   //

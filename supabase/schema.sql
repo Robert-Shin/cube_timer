@@ -665,3 +665,56 @@ grant execute on function public.friend_calendar(uuid, uuid, date) to authentica
 grant execute on function public.friend_stats(uuid, uuid) to authenticated;
 grant execute on function public.friend_daily(uuid, text) to authenticated;
 grant execute on function public.friend_sessions(uuid) to authenticated;
+
+-- The first friend function that returns SOLVE ROWS rather than aggregates.
+-- Drawing a distribution or a trend cannot be done from day counts, and the
+-- friend page is meant to mirror the owner's own stats page.
+--
+-- What a friend may see is therefore now: the times and penalties of solves
+-- in a session, ordered but not timestamped. What a friend may still never
+-- see: a scramble, a solve id, a session id, or the clock time of a solve.
+-- Same security-definer posture as the four above -- RLS does not apply in
+-- here, so the are_friends check IS the boundary, in full.
+create or replace function public.friend_solves(
+  p_user uuid, p_session uuid, p_limit int)
+returns table (day date, time_ms int, penalty text)
+language sql stable security definer set search_path = public as $$
+  select
+    -- A date, not created_at. The trend chart uses the timestamp only to
+    -- print a date in a tooltip, and friend_calendar already exposes
+    -- per-day activity -- so a date discloses nothing new, while a full
+    -- timestamp would hand over the exact minute of every solve a person
+    -- has ever done. Ordering is carried by the ORDER BY below, which is
+    -- what averageOf needs; the timestamp itself never leaves the server.
+    (s.created_at at time zone 'UTC')::date,
+    s.time_ms,
+    s.penalty
+  from public.solves s
+  join public.sessions n on n.id = s.session_id
+  where s.user_id = p_user
+    and n.id = p_session
+    -- Not redundant with s.user_id = p_user. p_session is an unvalidated id
+    -- from the caller: the check that matters is that the session being read
+    -- belongs to the friend named in p_user, not merely that some solves in
+    -- it do. Same trap as friend_calendar.
+    and n.user_id = p_user
+    and not s.deleted
+    and not n.deleted
+    -- This is a set-returning query with a FROM clause, so a failed check
+    -- yields zero rows naturally. It needs no outer WHERE of the kind
+    -- friend_stats carries -- that exists only because a FROM-less scalar
+    -- select list always returns exactly one row.
+    and public.are_friends(auth.uid(), p_user)
+  order by s.created_at desc
+  -- p_limit is attacker-controlled, so the ceiling is enforced here rather
+  -- than trusted from the client: a caller asking for 10^9 rows gets 2000.
+  limit least(coalesce(p_limit, 2000), 2000);
+$$;
+
+-- `revoke ... from public` alone would leave this callable by anyone holding
+-- the public anon key: PUBLIC is a separate pseudo-role, and Supabase's
+-- default privileges grant execute to anon and authenticated BY NAME the
+-- moment the function is created. Each named role must be revoked by name.
+revoke all on function public.friend_solves(uuid, uuid, int)
+  from public, anon, authenticated;
+grant execute on function public.friend_solves(uuid, uuid, int) to authenticated;
