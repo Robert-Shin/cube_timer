@@ -80,6 +80,9 @@ export default function App() {
   // Solve awaiting a parity answer; it is already recorded, so a reload
   // during the prompt keeps the time and simply leaves parity unset.
   const [pendingParity, setPendingParity] = useState<string | null>(null)
+  // Id of the solve the stage is currently showing the time of. Null between
+  // the start of a solve and its stop.
+  const [resultId, setResultId] = useState<string | null>(null)
   const typedInput = useRef<HTMLInputElement>(null)
   const settingsPanel = useRef<HTMLElement>(null)
   const settingsBtn = useRef<HTMLButtonElement>(null)
@@ -381,6 +384,7 @@ export default function App() {
           : { ...prev, solves: [solve, ...prev.solves] },
       )
       if (asking) setPendingParity(id)
+      setResultId(id)
       nextScramble(parsedDiscipline)
     },
     [
@@ -412,6 +416,19 @@ export default function App() {
     tab === 'timer' && !typing && !modalOpen,
     boundaries,
   )
+
+  // The solve last recorded, so the stage keeps showing it instead of
+  // dropping back to 0.00 -- and re-renders as DNF or a +2 the moment its
+  // penalty is changed, which the raw rAF `display` cannot know about.
+  const resultSolve = useMemo(
+    () => (resultId === null ? null : (solves.find((s) => s.id === resultId) ?? null)),
+    [resultId, solves],
+  )
+  // Cleared when the next solve actually starts, not when the hold begins:
+  // the hold is when you are still reading the time you just posted.
+  useEffect(() => {
+    if (state === 'running') setResultId(null)
+  }, [state])
 
   const submitTyped = (e: React.FormEvent) => {
     e.preventDefault()
@@ -832,7 +849,11 @@ export default function App() {
                 </form>
               ) : (
                 <div className="timer">
-                  {settings.hideTimeWhileSolving && state === 'running' ? 'solving' : formatMs(display)}
+                  {settings.hideTimeWhileSolving && state === 'running'
+                    ? 'solving'
+                    : state !== 'running' && resultSolve
+                      ? formatSolve(resultSolve)
+                      : formatMs(display)}
                 </div>
               )}
               {trackingSplits && (
@@ -966,6 +987,7 @@ export default function App() {
               key={event}
               event={event}
               paused={modalOpen}
+              hideTimeWhileSolving={settings.hideTimeWhileSolving}
               onRecord={(timeMs, scrambleUsed) => {
                 // An ordinary local solve: no new column on `solves`, because
                 // the attempt row server-side is the authoritative record of

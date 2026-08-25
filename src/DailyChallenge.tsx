@@ -16,12 +16,16 @@ export function DailyChallenge({
   event,
   onRecord,
   paused,
+  hideTimeWhileSolving,
 }: {
   event: EventId
   onRecord: (timeMs: number, scramble: string) => void
   /** True while a modal owns the keyboard, so space doesn't fire a phantom
    * solve that would silently burn the day's one immutable attempt. */
   paused: boolean
+  /** The user's timer setting, honoured here as on the timer tab -- the
+   * running count is hidden, the recorded result is not. */
+  hideTimeWhileSolving: boolean
 }) {
   const [reveal, setReveal] = useState<Reveal | null>(null)
   const [result, setResult] = useState<number | null>(null)
@@ -63,9 +67,15 @@ export function DailyChallenge({
   }
 
   return (
-    <div className="challenge">
+    // The state class goes on the container, not on .timer itself: the
+    // hold/ready colours are defined as `.state-holding .timer`, a descendant
+    // selector, so a class on the element it is meant to colour never
+    // matched and the challenge timer stayed grey through the hold.
+    <div className={`challenge state-${state}`}>
       <p className="scramble">{reveal.scramble}</p>
-      <div className={`timer state-${state}`}>{formatMs(result ?? display)}</div>
+      <div className="timer">
+        {hideTimeWhileSolving && state === 'running' ? 'solving' : formatMs(result ?? display)}
+      </div>
       <p className="hint">
         {result !== null ? 'Submitted. Come back tomorrow.' : 'Hold space to start'}
       </p>

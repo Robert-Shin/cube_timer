@@ -122,9 +122,10 @@ export function useTimer(
       }
       if (e.code !== 'Space' || stateRef.current !== 'idle') return
       set('holding')
-      // Clear the previous solve as soon as the hold begins, so the next
-      // scramble is never read against a stale time.
-      setDisplay(0)
+      // The previous solve's time stays on screen through the hold and the
+      // ready state; start() is what clears it. Zeroing here instead would
+      // wipe the result you just posted the moment you begin the next hold,
+      // which is exactly when you are still reading it.
       holdTimer.current = window.setTimeout(() => set('ready'), HOLD_MS)
     }
 
@@ -148,8 +149,12 @@ export function useTimer(
 
   useEffect(() => {
     if (!enabled) {
+      // Only an in-flight solve is thrown away. A finished time stays on
+      // screen, because the usual reason the timer is disabled right after a
+      // stop is a modal about the solve that just ended -- clearing here
+      // would blank the result before it could be read.
+      if (stateRef.current !== 'idle') setDisplay(0)
       set('idle')
-      setDisplay(0)
     }
   }, [enabled, set])
 
