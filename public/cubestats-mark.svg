@@ -1,10 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
-  <!-- A normal distribution: the app is about the shape of your times, not
-       about the cube. Filled rather than stroked so it survives 16px. -->
+  <!-- The same mark as the in-app wordmark (App.tsx, .wordmark .mark): a
+       normal distribution over a baseline. The art is the wordmark's 32x22
+       viewBox shifted down 5 to sit centred in a square tab icon, and the
+       colours are the --accent / --dim tokens from index.css hard-coded,
+       since a favicon cannot read CSS variables. Filled rather than stroked
+       so the curve survives 16px. -->
   <style>
-    .base { fill: #8c8c8c; }
-    @media (prefers-color-scheme: dark) { .base { fill: #6e6e6e; } }
+    .curve { fill: #2a78d6; }
+    .axis { stroke: #6e6e6e; }
+    @media (prefers-color-scheme: dark) {
+      .curve { fill: #3987e5; }
+      .axis { stroke: #8c8c8c; }
+    }
   </style>
-  <path fill="#2a78d6" d="M1 25.5C9 25.5 12.5 4 16 4s7 21.5 15 21.5z" />
-  <rect class="base" x="1" y="25.5" width="30" height="2.6" rx="1.3" />
+  <path class="curve" d="M1 23C9 23 12.5 8 16 8s7 15 15 15z" />
+  <path class="axis" d="M1 24.4h30" stroke-width="1.8" stroke-linecap="round" fill="none" />
 </svg>
