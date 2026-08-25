@@ -1210,8 +1210,13 @@ try {
     }),
   )
 
-  await expectEmpty(
-    'friend_solves: an anonymous caller sees nothing',
+  // expectPermissionDenied, not expectEmpty: friend_solves revokes EXECUTE
+  // from anon, so an anonymous caller gets a bare 42501 and never reaches
+  // the query at all. expectEmpty can't tell that apart from "the function
+  // ran and decided to return nothing" -- the same anon-grant blind spot
+  // documented above expectPermissionDenied's definition.
+  await expectPermissionDenied(
+    'friend_solves: anon cannot execute it at all',
     anon.rpc('friend_solves', {
       p_user: b.userId, p_session: friendSessionId, p_limit: 100,
     }),
