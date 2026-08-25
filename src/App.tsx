@@ -1063,6 +1063,11 @@ export default function App() {
           solve={detail}
           ordinal={solves.length - solves.indexOf(detail)}
           event={event}
+          // `detail` is looked up from `solves`, which is already filtered to
+          // the active session -- so the active discipline is correct here.
+          // If that filter is ever widened, this needs to look up the
+          // solve's own session's discipline instead.
+          discipline={discipline}
           onPenalty={(p) => setPenalty(detail.id, p)}
           onParity={(parity) =>
             setStore((prev) => ({
