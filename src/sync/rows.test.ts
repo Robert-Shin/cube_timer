@@ -23,4 +23,10 @@ describe('splits round-trip', () => {
     expect(rowToSolve({ ...solveToRow(solve({}), 'u1'), splits: null }).splits).toBeUndefined()
     expect(rowToSolve({ ...solveToRow(solve({}), 'u1'), splits: [] } as SolveRow).splits).toEqual([])
   })
+
+  it('rounds fractional splits like time_ms, so the integer[] column never rejects the row', () => {
+    const row = solveToRow(solve({ splits: [5123.4, 18004.9, 41233.1] }), 'u1')
+    expect(row.splits).toEqual([5123, 18005, 41233])
+    expect(row.splits?.every(Number.isInteger)).toBe(true)
+  })
 })

@@ -78,8 +78,11 @@ export function solveToRow(s: Solve, userId: string): SolveRow {
     // would bias every parity comparison.
     parity: s.parity ?? null,
     // null means untracked, [] means tracked with no boundaries -- the same
-    // distinction `parity` draws directly above.
-    splits: s.splits ?? null,
+    // distinction `parity` draws directly above. Round for the same reason
+    // as time_ms: useTimer stores fractional performance.now() deltas, and
+    // the column is integer[] -- an unrounded value throws in Postgres and
+    // aborts the tick before the pull and cursor write, deadlocking sync.
+    splits: s.splits?.map(Math.round) ?? null,
     created_at: iso(s.createdAt),
     updated_at: iso(s.updatedAt),
     deleted: s.deleted ?? false,

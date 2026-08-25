@@ -140,6 +140,19 @@ export default function App() {
   // skips tombstones itself.
   const relays = useMemo(() => relayKeys(store), [store])
 
+  // Deleting the last session of a relay removes it from `relays` above (it
+  // has no live session left to be found by) without touching
+  // activeDiscipline, which still names it. Without this, the picker below
+  // would have no <option> matching `discipline` and render blank -- with
+  // the stage still generating scrambles and timing into a relay draft the
+  // header no longer shows or lets you navigate away from cleanly. Render it
+  // as its own option so the select always has a match; it drops out of the
+  // list on its own once a solve is recorded and it rejoins `relays`.
+  const orphanRelay =
+    discipline.startsWith('relay:') && !relays.includes(discipline)
+      ? parseDiscipline(discipline)
+      : null
+
   // The event a relay falls back to when it has no single sole event. Every
   // reader of `event` below that would misfire on that fallback (parity, the
   // daily challenge) guards itself with `legs.length === 1` rather than
@@ -557,6 +570,9 @@ export default function App() {
                   </option>
                 )
               })}
+              {orphanRelay && (
+                <option value={discipline}>{disciplineLabel(orphanRelay)}</option>
+              )}
               <option value="__new_relay__">New relay…</option>
             </select>
             {/* Only when this discipline actually has more than one log --
@@ -1040,11 +1056,8 @@ export default function App() {
       )}
       {buildingRelay && (
         <RelayBuilder
+          slotsLeft={MAX_SESSIONS - liveSessions.length}
           onCreate={(events) => {
-            // createRelaySession returns the store unchanged if MAX_SESSIONS
-            // is already hit; the builder still closes either way, matching
-            // the picker's other creation flows, which give no separate
-            // "were you actually saved" feedback either.
             setStore((prev) => createRelaySession(prev, events))
             setBuildingRelay(false)
           }}

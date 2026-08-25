@@ -10,9 +10,11 @@ import { disciplineLabel, relayDiscipline } from './discipline'
  * preview below is built the same way, and what is shown is what is stored.
  */
 export function RelayBuilder({
+  slotsLeft,
   onCreate,
   onClose,
 }: {
+  slotsLeft: number
   onCreate: (events: EventId[]) => void
   onClose: () => void
 }) {
@@ -25,6 +27,11 @@ export function RelayBuilder({
   // disagree with the relay that actually gets written.
   const legs = EVENTS.map((e) => e.id).filter((id) => picked.includes(id))
   const enough = legs.length >= 2
+  // Mirrors SessionManager's `full`: without this, Create closed the
+  // builder and createRelaySession silently returned the store unchanged,
+  // leaving the user who had just picked legs and read the preview with
+  // nothing and no explanation.
+  const full = slotsLeft <= 0
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -52,10 +59,14 @@ export function RelayBuilder({
         </div>
 
         <p className="note">
-          {enough ? disciplineLabel(relayDiscipline(legs)) : 'Pick at least two puzzles.'}
+          {full
+            ? 'All session slots are full — delete one to create a relay.'
+            : enough
+              ? disciplineLabel(relayDiscipline(legs))
+              : 'Pick at least two puzzles.'}
         </p>
 
-        <button className="primary" disabled={!enough} onClick={() => onCreate(legs)}>
+        <button className="primary" disabled={!enough || full} onClick={() => onCreate(legs)}>
           Create
         </button>
       </div>
