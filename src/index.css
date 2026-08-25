@@ -849,6 +849,19 @@ button.danger:hover { background: color-mix(in oklab, var(--danger) 14%, var(--p
 .modal.narrow { width: min(440px, 100%); }
 .modal.wide { width: min(720px, 100%); }
 
+.relay-events {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 0.35rem 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.relay-event {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 /* ---- friends ----------------------------------------------------------- */
 .friends { display: flex; flex-direction: column; gap: var(--sp-3); }
 .friends form { display: flex; gap: var(--sp-2); }
