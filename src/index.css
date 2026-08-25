@@ -33,14 +33,6 @@
   --cal3: #4f8dd4;
   --cal4: #2a78d6;
 
-  /* Friend-profile practice calendar ramp. Validated against --panel #ffffff
-     (ordinal, single hue, monotone lightness, adjacent gaps >= 0.06, light
-     end clears the 2:1 floor). Level 0 uses --line, not a new colour. */
-  --friend-cal-1: #86b6ef;
-  --friend-cal-2: #3987e5;
-  --friend-cal-3: #256abf;
-  --friend-cal-4: #104281;
-
   /* The mark's one coloured facelet. Chrome never uses it. */
   --accent: var(--s1);
   --on-accent: #ffffff;
@@ -101,14 +93,6 @@
     --cal3: #2a72c4;
     --cal4: #3987e5;
 
-    /* Reversed order from light: on a dark surface, more activity must read
-       as MORE prominent, so it moves toward the light end of the ramp.
-       Validated against --panel #171717. */
-    --friend-cal-1: #184f95;
-    --friend-cal-2: #256abf;
-    --friend-cal-3: #3987e5;
-    --friend-cal-4: #86b6ef;
-
     --dist-fill: 0.2;
     --dist-fill-on: 0.44;
     --dist-fill-off: 0.08;
@@ -145,14 +129,6 @@
   --cal2: #1d5490;
   --cal3: #2a72c4;
   --cal4: #3987e5;
-
-  /* Reversed order from light: on a dark surface, more activity must read as
-     MORE prominent, so it moves toward the light end of the ramp. Validated
-     against --panel #171717. */
-  --friend-cal-1: #184f95;
-  --friend-cal-2: #256abf;
-  --friend-cal-3: #3987e5;
-  --friend-cal-4: #86b6ef;
 
   --dist-fill: 0.2;
   --dist-fill-on: 0.44;
@@ -936,7 +912,75 @@ button.danger:hover { background: color-mix(in oklab, var(--danger) 14%, var(--p
 .friends li button.link { margin-right: auto; }
 .friends .error { margin: 0; }
 
-.friend-profile { display: flex; flex-direction: column; gap: var(--sp-3); }
+/* ---- a friend's page ---------------------------------------------------- */
+/* A page, not a modal: no backdrop, no width cap, and its own scroll
+   container -- body is overflow:hidden so the document never scrolls. */
+.friend-page {
+  height: 100dvh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4) var(--sp-3);
+  background: var(--panel);
+}
+/* The one thing that has to be unmistakable: whose page this is. Chrome in
+   here is greyscale -- colour means data, never decoration -- so a --raised
+   bar carries it, and stays put while the charts scroll under it. */
+.friend-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0 calc(var(--sp-4) * -1);
+  background: var(--raised);
+}
+.friend-bar-who { display: flex; align-items: baseline; gap: var(--sp-3); min-width: 0; }
+.friend-bar-label { font-size: var(--t-xs); color: var(--dim); }
+.friend-bar h1 {
+  margin: 0;
+  font-size: var(--t-lg);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The summary block reads as a column, not a full-width ledger: on a wide
+   page a figure stranded at the far edge loses its own label. The charts
+   below keep the full width, which is where the width earns its keep. */
+.friend-page > .ctrl,
+.friend-page > .figures,
+.friend-page > .friend-daily,
+.friend-page > .stats-pane,
+.friend-page > .note,
+.friend-page > .empty,
+.friend-page > .error { max-width: 52ch; }
+
+/* Charts left, the solve log right -- the same two-column reading order the
+   owner's own stats tab has. The log sticks and scrolls inside itself, so a
+   2,000-solve session never stretches the page. */
+.friend-stats-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: var(--sp-4);
+  align-items: start;
+}
+.friend-stats-grid .pane-right {
+  position: sticky;
+  top: var(--sp-5);
+  max-height: calc(100dvh - var(--sp-5) * 3);
+}
+@media (max-width: 760px) {
+  .friend-stats-grid { grid-template-columns: minmax(0, 1fr); }
+  .friend-stats-grid .pane-right {
+    position: static;
+    max-height: none;
+    border-left: none;
+    border-top: 1px solid var(--line);
+  }
+}
 
 .detail-time {
   font-family: var(--font-num);
@@ -1198,21 +1242,6 @@ kbd {
   white-space: nowrap;
   border: 0;
 }
-
-/* ---- friend profile practice grid ------------------------------------- */
-/* One column per week, one cell per day. Level 0 is the neutral --line
-   floor, not a calendar-specific colour -- an empty day is chrome, not data.
-   The grid itself is aria-hidden; a .visually-hidden summary next to it
-   carries the same information to screen readers (see FriendCalendar.tsx). */
-.friend-calendar { display: grid; grid-template-rows: repeat(7, 1fr); grid-auto-flow: column; gap: 2px; }
-.friend-calendar .cell { width: 10px; height: 10px; border-radius: 2px; background: var(--line); }
-.friend-calendar .cell.l1 { background: var(--friend-cal-1); }
-.friend-calendar .cell.l2 { background: var(--friend-cal-2); }
-.friend-calendar .cell.l3 { background: var(--friend-cal-3); }
-.friend-calendar .cell.l4 { background: var(--friend-cal-4); }
-
-.friend-profile { display: flex; flex-direction: column; gap: var(--sp-3); max-width: 46ch; margin: 0 auto; }
-.friend-profile h2 { margin: 0; }
 
 .goal-input {
   width: 66px;

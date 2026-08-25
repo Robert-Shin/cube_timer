@@ -39,10 +39,11 @@ import { visible } from './sync/merge'
 import { useSync } from './sync/engine'
 import { AuthPanel } from './AuthPanel'
 import { FriendsPanel } from './FriendsPanel'
-import { FriendProfile } from './FriendProfile'
-import { claimUsername, setOptIn, shouldClaimUsername, useProfile } from './profile'
+import { claimUsername, fetchProfile, setOptIn, shouldClaimUsername, useProfile } from './profile'
+import { FriendStats } from './FriendStats'
+import { friendHash, useRoute } from './route'
 import { hasSubmittedToday } from './dailyClient'
-import { syncConfigured } from './supabase'
+import { supabase, syncConfigured } from './supabase'
 import { ImportDialog } from './ImportDialog'
 import { SessionManager } from './SessionManager'
 import { SolveDetail } from './SolveDetail'
@@ -55,7 +56,120 @@ import { suggestGoal } from './stats'
 import { DailyChallenge } from './DailyChallenge'
 import { RelayBuilder } from './RelayBuilder'
 
+/**
+ * The app's router, and the only component mounted unconditionally.
+ *
+ * A friend's page renders INSTEAD of the timer, not on top of it: the timer's
+ * keyboard handlers are window listeners and its scramble generation is an
+ * effect, so an early return inside `TimerApp` would leave both running
+ * behind the page. They can only be kept off by not mounting `TimerApp` at
+ * all.
+ */
 export default function App() {
+  const route = useRoute()
+  return route.kind === 'friend' ? <FriendRoute userId={route.userId} /> : <TimerApp />
+}
+
+/**
+ * The signed-in email, tracked the same way the sync engine tracks it.
+ *
+ * Read here rather than out of `useSync`, which owns the whole replication
+ * loop and needs the store -- a friend's page has neither. The two
+ * subscriptions never coexist: `TimerApp` is unmounted whenever this runs.
+ *
+ * `undefined` means "not resolved yet", which is NOT `null`, "signed out":
+ * redirecting on the former would bounce every reload of a friend's page
+ * before auth had a chance to answer.
+ */
+function useSignedInEmail(): string | null | undefined {
+  const [email, setEmail] = useState<string | null | undefined>(supabase ? undefined : null)
+  useEffect(() => {
+    if (!supabase) return
+    void supabase.auth.getSession().then(({ data }) => setEmail(data.session?.user.email ?? null))
+    const { data } = supabase.auth.onAuthStateChange((_event, session) =>
+      setEmail(session?.user.email ?? null),
+    )
+    return () => data.subscription.unsubscribe()
+  }, [])
+  return email
+}
+
+/**
+ * `sync.email && !gateActive`, the predicate that gates the Friends button,
+ * as an explicit three-state so the route can tell "not decided yet" from
+ * "no".
+ *
+ * Composing `useProfile` + `shouldClaimUsername` here does NOT work, and the
+ * failure is silent: `useProfile` sets `loading` inside an effect, so in the
+ * render where the email first arrives it is still false with a null profile
+ * -- exactly the shape of an active claim gate. The redirect below fires on
+ * that render and bounces every signed-in user off their friend's page.
+ * Observed in a browser before this was written; the composed version looked
+ * correct on the page.
+ *
+ * The mapping is otherwise the same one `shouldClaimUsername` makes: a null
+ * profile is the gate, and a THROWN fetch is not -- a network blip must not
+ * strand someone who does have a username.
+ */
+function useFriendAccess(): 'resolving' | 'allowed' | 'denied' {
+  const email = useSignedInEmail()
+  const [access, setAccess] = useState<'resolving' | 'allowed' | 'denied'>('resolving')
+
+  useEffect(() => {
+    if (email === undefined) return
+    if (!email) {
+      setAccess('denied')
+      return
+    }
+    let stale = false
+    setAccess('resolving')
+    fetchProfile()
+      .then((p) => {
+        if (!stale) setAccess(p ? 'allowed' : 'denied')
+      })
+      .catch(() => {
+        if (!stale) setAccess('allowed')
+      })
+    return () => {
+      stale = true
+    }
+  }, [email])
+
+  return access
+}
+
+/**
+ * The friend route, and the gate in front of it.
+ *
+ * A friend page is meaningless without an account, and friendships have a
+ * foreign key to profiles(user_id) -- so a user still behind the claim gate
+ * can neither befriend nor be found. Same predicate that gates the Friends
+ * button in the header.
+ */
+function FriendRoute({ userId }: { userId: string }) {
+  const access = useFriendAccess()
+
+  useEffect(() => {
+    // Signing out -- here or in another tab -- while on a friend page must
+    // not leave it on screen. Clearing the hash is what sends the route home.
+    if (access === 'denied') window.location.hash = ''
+  }, [access])
+
+  // history.back() when there is somewhere to go back to -- the natural
+  // gesture -- and an explicit hash reset when the page was reached by a
+  // pasted link, where Back would leave the site entirely.
+  const onLeave = () => {
+    if (window.history.length > 1) window.history.back()
+    else window.location.hash = ''
+  }
+
+  // Deliberately blank rather than a spinner: this lasts one auth round-trip,
+  // and in the denied case the redirect above is already on its way.
+  if (access !== 'allowed') return null
+  return <FriendStats userId={userId} onLeave={onLeave} />
+}
+
+function TimerApp() {
   const [store, setStore] = useState<Store>(() => loadStore())
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
   const [scrambles, setScrambles] = useState<string[]>([])
@@ -70,7 +184,6 @@ export default function App() {
   const [showAuth, setShowAuth] = useState(false)
   const [showFriends, setShowFriends] = useState(false)
   const [buildingRelay, setBuildingRelay] = useState(false)
-  const [openFriend, setOpenFriend] = useState<{ id: string; name: string } | null>(null)
   // Solve awaiting a parity answer; it is already recorded, so a reload
   // during the prompt keeps the time and simply leaves parity unset.
   const [pendingParity, setPendingParity] = useState<string | null>(null)
@@ -540,11 +653,11 @@ export default function App() {
                 )}
               </button>
             )}
-            {/* Same signed-in-and-past-the-gate predicate that decides whether
-                FriendsPanel/FriendProfile may render below -- see the comment
-                there. Reusing it here, rather than inventing a second "may
-                use friends" check, keeps the button and the gate from ever
-                disagreeing. */}
+            {/* Same signed-in-and-past-the-gate predicate that decides
+                whether FriendsPanel may render below, and whether the friend
+                ROUTE resolves at all -- see the comments there. Reusing it,
+                rather than inventing a second "may use friends" check, keeps
+                the button, the panel and the route from ever disagreeing. */}
             {sync.email && !gateActive && (
               <button className="ghost" onClick={() => setShowFriends(true)}>
                 Friends
@@ -1069,25 +1182,20 @@ export default function App() {
           username can neither befriend nor be found by anyone, and the gate
           is deliberately inescapable while active. Also gated on showFriends,
           the same way AuthPanel is gated on showAuth -- a way in (the header
-          button above) and a way out (each panel's Close/Back). */}
-      {showFriends &&
-        sync.email &&
-        !gateActive &&
-        (openFriend ? (
-          <FriendProfile
-            userId={openFriend.id}
-            username={openFriend.name}
-            onClose={() => setOpenFriend(null)}
-          />
-        ) : (
-          <FriendsPanel
-            onOpen={(id, name) => setOpenFriend({ id, name })}
-            onClose={() => {
-              setShowFriends(false)
-              setOpenFriend(null)
-            }}
-          />
-        ))}
+          button above) and a way out (the panel's Close). Opening a friend
+          navigates; there is no friend modal any more. */}
+      {showFriends && sync.email && !gateActive && (
+        <FriendsPanel
+          onOpen={(id) => {
+            // `id` came out of listFriends(), never out of the URL or a text
+            // field -- friendHash does not validate its argument, and a
+            // malformed one would silently build a link to your OWN page.
+            window.location.hash = friendHash(id)
+            setShowFriends(false)
+          }}
+          onClose={() => setShowFriends(false)}
+        />
+      )}
       {toast && <div className="toast">{toast}</div>}
     </div>
   )

@@ -15,7 +15,10 @@ export function FriendsPanel({
   onOpen,
   onClose,
 }: {
-  onOpen: (userId: string, username: string) => void
+  /** Navigation, not a modal: the page resolves the name itself, so it is
+   * deliberately not passed here -- handing it over would invite reading a
+   * display name off the URL later. */
+  onOpen: (userId: string) => void
   onClose: () => void
 }) {
   const [data, setData] = useState<{ partitioned: Partitioned; names: Map<string, string> } | null>(null)
@@ -163,7 +166,7 @@ export function FriendsPanel({
           <ul>
             {p.accepted.map((id) => (
               <li key={id}>
-                <button className="link" onClick={() => onOpen(id, label(id))}>
+                <button className="link" onClick={() => onOpen(id)}>
                   {label(id)}
                 </button>
                 <button disabled={busyIds.has(id)} onClick={() => handleUnfriend(id)}>
