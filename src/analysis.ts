@@ -68,6 +68,37 @@ export function histogram(
 }
 
 /**
+ * Bucket widths offered in the UI, in ms. Fixed rather than derived so the
+ * axis always reads in round numbers.
+ */
+export const BUCKET_OPTIONS = [50, 100, 250, 500, 1000] as const
+
+/** Bins to aim for across the data's range -- enough to show the shape of a
+ *  distribution without every bin holding one solve. */
+const TARGET_BINS = 30
+
+/**
+ * The offered bucket width that best fits a set of solves.
+ *
+ * A fixed 0.1s default is right for 3x3 and useless for 4x4 and up, where the
+ * spread is tens of seconds and 0.1s bins hold one or two solves each -- the
+ * distribution reads as noise rather than a shape. This picks whichever
+ * offered width lands closest to TARGET_BINS across the actual range, in log
+ * space so 250ms is treated as the midpoint between 100 and 500 rather than
+ * being lost to the linear gap.
+ */
+export function suggestBucket(solves: Solve[]): number {
+  const times = solves.map((s) => effectiveMs(s)).filter((t): t is number => t !== null)
+  if (times.length < 2) return 100
+  const range = Math.max(...times) - Math.min(...times)
+  if (range <= 0) return BUCKET_OPTIONS[0]
+  const target = range / TARGET_BINS
+  return BUCKET_OPTIONS.reduce((best, opt) =>
+    Math.abs(Math.log(opt / target)) < Math.abs(Math.log(best / target)) ? opt : best,
+  )
+}
+
+/**
  * Parity categories in stacking order: no-parity first as the baseline, then
  * by frequency. Beyond MAX_SERIES they fold into "other" rather than growing
  * the palette, and untracked solves always sort last.

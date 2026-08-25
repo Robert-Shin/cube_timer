@@ -49,6 +49,12 @@
   --hold: var(--s8);
   --ready: var(--s3);
 
+  /* Fill alphas for overlaid distribution curves -- see .dist-area. Dark
+     needs more alpha than light for the same lift off its surface. */
+  --dist-fill: 0.16;
+  --dist-fill-on: 0.38;
+  --dist-fill-off: 0.06;
+
   --font-timer: ui-monospace, "SF Mono", "JetBrains Mono", "Roboto Mono", Menlo,
     Consolas, monospace;
   --font-num: var(--font-timer);
@@ -103,6 +109,10 @@
     --friend-cal-3: #3987e5;
     --friend-cal-4: #86b6ef;
 
+    --dist-fill: 0.2;
+    --dist-fill-on: 0.44;
+    --dist-fill-off: 0.08;
+
     --on-accent: #0d0d0d;
   }
 }
@@ -143,6 +153,10 @@
   --friend-cal-2: #256abf;
   --friend-cal-3: #3987e5;
   --friend-cal-4: #86b6ef;
+
+  --dist-fill: 0.2;
+  --dist-fill-on: 0.44;
+  --dist-fill-off: 0.08;
 
   --on-accent: #0d0d0d;
 }
@@ -709,7 +723,7 @@ button.link:focus-visible { outline: 2px solid var(--text); outline-offset: 2px;
   stroke-linejoin: round;
   stroke-linecap: round;
 }
-.crosshair { stroke: var(--dim); stroke-width: 1; stroke-dasharray: 3 3; }
+.crosshair { stroke: var(--dim); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
 .marker { fill: var(--series-1); stroke: var(--panel); stroke-width: 2; }
 
 .legend { display: flex; gap: 16px; font-size: 12px; color: var(--dim); margin-bottom: 4px; }
@@ -979,6 +993,81 @@ button.danger:hover { background: color-mix(in oklab, var(--danger) 14%, var(--p
 .bar.s3, .swatch.box.s3 { fill: var(--s3); background: var(--s3); }
 .bar.s4, .swatch.box.s4 { fill: var(--s4); background: var(--s4); }
 .bar.bar-on { opacity: 0.78; }
+
+/* Overlaid parity distributions. Identity rides on the outline, which is the
+   full-strength series colour and passes the categorical checks on both
+   surfaces (light #ffffff: CVD ΔE 9.1, normal 22.9, contrast relieved by the
+   always-present legend; dark #171717: CVD ΔE 8.4, normal 19.8, contrast
+   >= 3:1). The fill is a composite of that colour over the surface and is
+   deliberately NOT identity-bearing -- four translucent fills cannot be told
+   apart from each other and are not asked to be. Its only job is to say which
+   side of the outline is inside the curve, so the alpha is set at the point
+   where a lone fill still clears its surface (light 1.24-1.44:1, dark
+   1.55-1.73:1) without three overlapping fills turning into mud. Dark needs
+   more alpha than light for the same lift, hence two values. */
+.dist-area { opacity: var(--dist-fill); stroke: none; }
+.dist-line {
+  fill: none;
+  stroke-width: var(--dist-stroke-w, 1.5);
+  stroke-opacity: var(--dist-stroke-o, 1);
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+/* Three strengths. The resting state is deliberately faint -- four curves at
+   full strength is the pile this view exists to unpick -- and picking a
+   category in the legend is what brings it forward.
+
+   Emphasis is carried by fill alpha and stroke WIDTH, never by fading the
+   stroke's colour: a stroke drawn at partial opacity composites to a
+   different colour, and at the alpha this needed the palette stopped passing
+   (light lost the lightness band on --s4, dark fell to CVD ΔE 7.8). A
+   highlighted curve therefore has the same validated hue as a resting one.
+   Only the receded state fades its stroke, which is the one case where being
+   hard to distinguish is the intent. */
+g.dist-on {
+  --dist-fill: var(--dist-fill-on);
+  --dist-stroke-w: 2.5;
+}
+g.dist-off {
+  --dist-fill: var(--dist-fill-off);
+  --dist-stroke-w: 1.25;
+  --dist-stroke-o: 0.35;
+}
+
+/* Fill and stroke are set in separate rules on purpose: a shared selector
+   listing both would also set `fill` on .dist-line, overriding its `fill:
+   none` and filling the outline path solid -- which hides every curve drawn
+   before it and makes the overlay look stacked again. */
+.dist-area.s1 { fill: var(--series-1); }
+.dist-area.s2 { fill: var(--series-2); }
+.dist-area.s3 { fill: var(--s3); }
+.dist-area.s4 { fill: var(--s4); }
+
+.dist-line.s1 { stroke: var(--series-1); }
+.dist-line.s2 { stroke: var(--series-2); }
+.dist-line.s3 { stroke: var(--s3); }
+.dist-line.s4 { stroke: var(--s4); }
+
+.legend-toggles { flex-wrap: wrap; }
+.legend-toggles button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.legend-toggles button:hover { border-color: var(--line); }
+.legend-toggles button.on { border-color: var(--line); background: var(--raised); color: var(--text); }
+/* Not display:none and not opacity alone -- a category you have set aside is
+   still worth reading, it just should not compete with the ones you picked. */
+.legend-toggles button.off { opacity: 0.45; }
+.legend-toggles .legend-clear { color: var(--dim); text-decoration: underline; }
 
 .swatch.box {
   width: 9px;

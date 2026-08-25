@@ -17,6 +17,7 @@ import {
   soleEvent,
   type Discipline,
 } from './discipline'
+import { BUCKET_OPTIONS, suggestBucket } from './analysis'
 import { formatMs, formatSolve } from './format'
 import { averageOf, best } from './stats'
 import { newScrambles } from './scramble'
@@ -68,7 +69,14 @@ export default function App() {
   const [showSessions, setShowSessions] = useState(false)
   const [importing, setImporting] = useState(false)
   const [detailId, setDetailId] = useState<string | null>(null)
-  const [bucketMs, setBucketMs] = useState(100)
+  // null = follow the data's spread (see suggestBucket). A width chosen by
+  // hand sticks until the session changes, at which point the spread it was
+  // chosen for is gone and auto takes over again.
+  const [bucketChoice, setBucketChoice] = useState<number | null>(null)
+  // Distribution view on events that have parity: one curve for every solve,
+  // or one per parity category overlaid. Ignored on events without parity,
+  // where there is only ever one curve to draw.
+  const [distSplit, setDistSplit] = useState(true)
   const [rollWindow, setRollWindow] = useState(50)
   const [showBand, setShowBand] = useState(true)
   const [calendarScope, setCalendarScope] = useState<'session' | 'all'>('session')
@@ -489,6 +497,8 @@ export default function App() {
   // useful before anyone opens the session manager.
   const goal = session.goalMs ?? suggestGoal(solves)
   const parityEvent = hasParity(event)
+  const bucketMs = useMemo(() => bucketChoice ?? suggestBucket(solves), [bucketChoice, solves])
+  useEffect(() => setBucketChoice(null), [session.id])
   // Tags only make sense while tracking is on: with it off, older solves would
   // keep showing parity that new solves silently never record.
   const showParityTags = settings.trackParity && parityEvent
@@ -896,21 +906,42 @@ export default function App() {
           <section className="panel">
             <div className="panel-head">
               <h2>Distribution · {session.name}</h2>
-              <label className="ctrl">
-                Bucket
-                <select value={bucketMs} onChange={(e) => setBucketMs(Number(e.target.value))}>
-                  <option value={50}>0.05s</option>
-                  <option value={100}>0.1s</option>
-                  <option value={250}>0.25s</option>
-                  <option value={500}>0.5s</option>
-                  <option value={1000}>1s</option>
-                </select>
-              </label>
+              <div className="ctrl-group">
+                {parityEvent && (
+                  <div className="seg">
+                    <button
+                      className={!distSplit ? 'active' : ''}
+                      onClick={() => setDistSplit(false)}
+                    >
+                      All solves
+                    </button>
+                    <button
+                      className={distSplit ? 'active' : ''}
+                      onClick={() => setDistSplit(true)}
+                    >
+                      By parity
+                    </button>
+                  </div>
+                )}
+                <label className="ctrl">
+                  Bucket
+                  <select
+                    value={bucketMs}
+                    onChange={(e) => setBucketChoice(Number(e.target.value))}
+                  >
+                    {BUCKET_OPTIONS.map((ms) => (
+                      <option key={ms} value={ms}>
+                        {BUCKET_LABELS[ms]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
             </div>
             <Histogram
               solves={solves}
               bucketMs={bucketMs}
-              splitByParity={parityEvent}
+              splitByParity={parityEvent && distSplit}
               event={event}
             />
           </section>
@@ -1212,4 +1243,13 @@ function fmt(v: number | null | undefined): string {
  */
 function fmtStat(v: number | null | undefined): string {
   return v == null ? '—' : formatMs(v)
+}
+
+/** Bucket widths as they read in the picker. */
+const BUCKET_LABELS: Record<number, string> = {
+  50: '0.05s',
+  100: '0.1s',
+  250: '0.25s',
+  500: '0.5s',
+  1000: '1s',
 }

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { EventId, Solve } from '../types'
 import { histogram } from '../analysis'
 import { formatMs } from '../format'
@@ -8,8 +8,15 @@ const HEIGHT = 280
 const PAD = { top: 12, right: 12, bottom: 34, left: 44 }
 
 /**
- * Distribution of solve times in fixed-width bins, optionally stacked by
- * parity category so the shift each parity causes is visible in place.
+ * Distribution of solve times in fixed-width bins.
+ *
+ * With `splitByParity` the parity categories are drawn as separate curves
+ * overlaid on a shared baseline rather than stacked. Stacking answers "how
+ * many solves in this bin, and of what kind" -- but the question parity
+ * tracking exists to answer is "does this parity shift my times", and that is
+ * a comparison of *shapes*. A stacked segment starts wherever the segment
+ * below it ended, so no two categories share a baseline and their shapes
+ * cannot be compared at all. Every curve here starts at zero.
  */
 export function Histogram({
   solves,
@@ -24,11 +31,20 @@ export function Histogram({
 }) {
   const { ref, width } = useWidth()
   const [hover, setHover] = useState<number | null>(null)
+  // Series keys the reader has picked out of the pile. Empty is the resting
+  // state, where every curve is drawn at the same low strength; once anything
+  // is picked, the rest recede so the comparison is between the picks.
+  const [highlit, setHighlit] = useState<ReadonlySet<string>>(new Set())
 
   const { buckets, series } = useMemo(
     () => histogram(solves, bucketMs, splitByParity, event),
     [solves, bucketMs, splitByParity, event],
   )
+
+  // Switching event or session replaces the categories entirely, so a
+  // highlight held over from the old ones would silently dim everything.
+  const seriesIds = series.map((s) => s.key).join('|')
+  useEffect(() => setHighlit(new Set()), [seriesIds])
 
   if (buckets.length === 0) {
     return (
@@ -38,9 +54,15 @@ export function Histogram({
     )
   }
 
+  const overlaid = series.length > 1
   const plotW = Math.max(80, width - PAD.left - PAD.right)
   const plotH = HEIGHT - PAD.top - PAD.bottom
-  const maxCount = Math.max(...buckets.map((b) => b.count))
+  // Overlaid curves are scaled to the tallest single category, not to the
+  // combined total: scaling to the total would squash every curve into the
+  // bottom of the plot, which is the flattening this view exists to undo.
+  const maxCount = overlaid
+    ? Math.max(1, ...buckets.flatMap((b) => series.map((s) => b.parts[s.key] ?? 0)))
+    : Math.max(...buckets.map((b) => b.count))
   const barW = plotW / buckets.length
 
   const x = (i: number) => PAD.left + i * barW
@@ -53,13 +75,30 @@ export function Histogram({
 
   return (
     <div className="chart" ref={ref}>
-      {series.length > 1 && (
-        <div className="legend">
+      {overlaid && (
+        <div className="legend legend-toggles">
           {series.map((s, i) => (
-            <span key={s.key}>
+            <button
+              key={s.key}
+              type="button"
+              aria-pressed={highlit.has(s.key)}
+              className={highlit.has(s.key) ? 'on' : highlit.size > 0 ? 'off' : ''}
+              onClick={() =>
+                setHighlit((prev) => {
+                  const next = new Set(prev)
+                  if (!next.delete(s.key)) next.add(s.key)
+                  return next
+                })
+              }
+            >
               <i className={`swatch box s${i + 1}`} /> {s.label} ({s.count})
-            </span>
+            </button>
           ))}
+          {highlit.size > 0 && (
+            <button type="button" className="legend-clear" onClick={() => setHighlit(new Set())}>
+              Show all evenly
+            </button>
+          )}
         </div>
       )}
 
@@ -73,48 +112,72 @@ export function Histogram({
           </g>
         ))}
 
-        {buckets.map((b, i) => {
-          if (b.count === 0) return null
-
-          // Unsplit: one bar. Split: segments stacked from the baseline up,
-          // in the shared series order so colors mean the same thing in
-          // every bin.
-          const segments =
-            series.length > 1
-              ? series.map((s) => ({ key: s.key, n: b.parts[s.key] ?? 0 }))
-              : [{ key: 'all', n: b.count }]
-
-          let acc = 0
-          return (
-            <g
-              key={b.startMs}
-              onMouseEnter={() => setHover(i)}
-              onMouseLeave={() => setHover(null)}
-            >
-              {/* Full-height hit area: thin bars are hard to hover. */}
-              <rect x={x(i)} y={PAD.top} width={barW} height={plotH} fill="transparent" />
-              {segments.map((seg, si) => {
-                if (seg.n === 0) return null
-                const h = (seg.n / maxCount) * plotH
-                const yTop = PAD.top + plotH - ((acc + seg.n) / maxCount) * plotH
-                acc += seg.n
-                return (
-                  <rect
-                    key={seg.key}
-                    x={x(i)}
-                    y={yTop}
-                    width={barPx}
-                    // 2px surface gap between stacked segments, but never
-                    // shrink a segment out of existence.
-                    height={Math.max(0.5, h - (si > 0 ? 2 : 0))}
-                    rx={Math.min(4, barW / 2)}
-                    className={`bar s${series.length > 1 ? si + 1 : 1} ${hover === i ? 'bar-on' : ''}`}
-                  />
+        {overlaid
+          ? // Highlighted curves are drawn last so they sit on top of the
+            // ones they are being compared against. The colour index is the
+            // series' own position, never its position in this order --
+            // repainting a curve because it was picked would break the one
+            // thing the legend promises.
+            series
+              .map((s, si) => ({ s, si }))
+              .sort((a, b) => Number(highlit.has(a.s.key)) - Number(highlit.has(b.s.key)))
+              .map(({ s, si }) => {
+                const path = stepPath(
+                  buckets.map((b) => b.parts[s.key] ?? 0),
+                  x,
+                  y,
+                  PAD.top + plotH,
                 )
-              })}
-            </g>
-          )
-        })}
+                const emphasis = highlit.has(s.key) ? 'dist-on' : highlit.size > 0 ? 'dist-off' : ''
+                // Fill and outline are one path each: the translucent fill is
+                // what lets a curve behind another still be read, and the
+                // opaque outline is what keeps its own shape legible where
+                // three fills have piled up.
+                return (
+                  <g key={s.key} className={emphasis}>
+                    <path d={path} className={`dist-area s${si + 1}`} />
+                    <path d={path} className={`dist-line s${si + 1}`} />
+                  </g>
+                )
+              })
+          : buckets.map((b, i) =>
+              b.count === 0 ? null : (
+                <rect
+                  key={b.startMs}
+                  x={x(i)}
+                  y={y(b.count)}
+                  width={barPx}
+                  height={PAD.top + plotH - y(b.count)}
+                  rx={Math.min(4, barW / 2)}
+                  className={`bar s1 ${hover === i ? 'bar-on' : ''}`}
+                />
+              ),
+            )}
+
+        {/* Hit areas last, so they sit above the marks. Full plot height,
+            because thin bars and thin curves are both hard to hover. */}
+        {buckets.map((b, i) => (
+          <rect
+            key={b.startMs}
+            x={x(i)}
+            y={PAD.top}
+            width={barW}
+            height={plotH}
+            fill="transparent"
+            onMouseEnter={() => setHover(i)}
+            onMouseLeave={() => setHover(null)}
+          />
+        ))}
+
+        {hover !== null && (
+          <line
+            x1={x(hover) + barW / 2}
+            x2={x(hover) + barW / 2}
+            y1={PAD.top}
+            y2={PAD.top + plotH}
+            className="crosshair"
+          />
+        )}
 
         {buckets.map((b, i) =>
           i % tickEvery === 0 ? (
@@ -150,7 +213,7 @@ export function Histogram({
           <span>
             {formatMs(active.startMs)} – {formatMs(active.startMs + active.widthMs)}
           </span>
-          {series.length > 1 &&
+          {overlaid &&
             series.map((s, i) =>
               active.parts[s.key] ? (
                 <span key={s.key} className="tip-row">
@@ -162,6 +225,26 @@ export function Histogram({
       )}
     </div>
   )
+}
+
+/**
+ * A closed step outline over the counts: flat across each bin's full width,
+ * vertical at the edges, and returning along the baseline so it can be filled.
+ * Drawn as steps rather than a smoothed line because a histogram bin is an
+ * interval, and a curve through bin centres invents times between them.
+ */
+function stepPath(
+  counts: number[],
+  x: (i: number) => number,
+  y: (c: number) => number,
+  baseY: number,
+): string {
+  const parts = [`M ${x(0)} ${baseY}`]
+  counts.forEach((c, i) => {
+    parts.push(`L ${x(i)} ${y(c)}`, `L ${x(i + 1)} ${y(c)}`)
+  })
+  parts.push(`L ${x(counts.length)} ${baseY}`, 'Z')
+  return parts.join(' ')
 }
 
 /** Whole-number ticks -- counts are never fractional. */
