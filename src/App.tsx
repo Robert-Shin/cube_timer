@@ -279,12 +279,28 @@ export default function App() {
     setTimeout(() => setToast(''), 4000)
   }
 
+  // Bumped on every call and captured in the closure below, so a call that
+  // switched discipline mid-flight (relay -> 3x3 while the relay's four
+  // random-state solvers are still loading) can tell its own result is
+  // stale and drop it -- otherwise the slow relay promise resolving last
+  // would overwrite the single scramble already showing, and `record` would
+  // join all four legs into the recorded solve's scramble field.
+  const scrambleRequest = useRef(0)
   const nextScramble = useCallback((d: Discipline) => {
+    const requestId = ++scrambleRequest.current
     setScrambling(true)
     newScrambles(d)
-      .then(setScrambles)
-      .catch(() => setScrambles(['scramble failed to generate']))
-      .finally(() => setScrambling(false))
+      .then((result) => {
+        if (requestId !== scrambleRequest.current) return
+        setScrambles(result)
+      })
+      .catch(() => {
+        if (requestId !== scrambleRequest.current) return
+        setScrambles(['scramble failed to generate'])
+      })
+      .finally(() => {
+        if (requestId === scrambleRequest.current) setScrambling(false)
+      })
   }, [])
 
   useEffect(() => nextScramble(parsedDiscipline), [parsedDiscipline, nextScramble])
@@ -297,7 +313,12 @@ export default function App() {
 
   /** Single path for recording a solve, whether timed or typed. */
   const record = useCallback(
-    (timeMs: number, splits: number[] = []) => {
+    // No default for `splits`: a default of [] would make every caller that
+    // omits it (typed entry; useTimer stopping a solve begun before
+    // trackSplits was toggled on) write "recorded, no boundaries" for a
+    // solve that was never split, indistinguishable from a real 1-boundary-
+    // short relay. Store it only when it was actually collected.
+    (timeMs: number, splits?: number[]) => {
       const id = crypto.randomUUID()
       // legs.length === 1 is the guard, NOT hasParity(event): `event` is the
       // '333' fallback for a relay, so hasParity would say true.
@@ -316,8 +337,18 @@ export default function App() {
         // unknown -- so they never show up as untracked.
         ...(asking ? {} : { parity: [] as ParityId[] }),
         // undefined, not [], when untracked -- the distinction the column
-        // and legDurations both depend on.
-        ...(trackingSplits ? { splits } : {}),
+        // and legDurations both depend on. `splits` is undefined only from
+        // typed entry, which never passes it -- useTimer's stop() always
+        // hands back an array. The length check catches the other stale
+        // case: useTimer snapshots `boundaries` at start(), so a solve begun
+        // before trackSplits flipped on stops with a splits array sized to
+        // the OLD boundaries (0), while `boundaries` here has already moved
+        // to the new value by the time this closure runs at stop. Without
+        // the length check that mismatch would still store `[]` against a
+        // solve nothing was ever collected for.
+        ...(trackingSplits && splits !== undefined && splits.length === boundaries
+          ? { splits }
+          : {}),
       }
       // A draft session becomes real here, written in the same update as the
       // solve that justifies it. The solve already carries the draft's id, so
@@ -330,7 +361,17 @@ export default function App() {
       if (asking) setPendingParity(id)
       nextScramble(parsedDiscipline)
     },
-    [session, isDraft, event, scrambles, trackingSplits, parsedDiscipline, nextScramble, settings.trackParity],
+    [
+      session,
+      isDraft,
+      event,
+      scrambles,
+      trackingSplits,
+      boundaries,
+      parsedDiscipline,
+      nextScramble,
+      settings.trackParity,
+    ],
   )
 
   const typing = settings.inputMode === 'typing'
@@ -697,18 +738,37 @@ export default function App() {
             <>
               <div className="scramble dimmable">
                 {scrambling ? (
-                  <p>Generating scramble…</p>
+                  <p className="scramble-leg">
+                    Generating scramble…
+                    <button
+                      className="ghost small refresh"
+                      onClick={() => nextScramble(parsedDiscipline)}
+                    >
+                      ↻
+                    </button>
+                  </p>
                 ) : (
                   scrambles.map((text, i) => (
                     <p key={i} className="scramble-leg">
                       {legs.length > 1 && <span className="leg-label">{eventName(legs[i])}</span>}
                       {text}
+                      {/* Kept inline in the last leg's <p>, not a sibling of the
+                          <p>s -- a sibling forms its own line box under a block
+                          <p>, dropping onto its own centred row below the
+                          scramble instead of trailing the text as it did before
+                          disciplines landed (and still does here, for the
+                          single-leg case that is all the UI can reach today). */}
+                      {i === scrambles.length - 1 && (
+                        <button
+                          className="ghost small refresh"
+                          onClick={() => nextScramble(parsedDiscipline)}
+                        >
+                          ↻
+                        </button>
+                      )}
                     </p>
                   ))
                 )}
-                <button className="ghost small refresh" onClick={() => nextScramble(parsedDiscipline)}>
-                  ↻
-                </button>
               </div>
 
               {typing ? (
@@ -731,8 +791,13 @@ export default function App() {
                   {settings.hideTimeWhileSolving && state === 'running' ? 'solving' : formatMs(display)}
                 </div>
               )}
-              {trackingSplits && state === 'running' && (
-                <p className="note">
+              {trackingSplits && (
+                // Always mounted while tracking splits, not conditionally
+                // rendered on `state === 'running'`: that would mount and
+                // unmount the line every start/stop, shifting the centred
+                // stage each time. `invisible` keeps its height reserved
+                // instead.
+                <p className={`note leg-indicator${state === 'running' ? '' : ' invisible'}`}>
                   Leg {leg + 1} of {legs.length}
                 </p>
               )}

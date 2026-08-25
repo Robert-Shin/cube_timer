@@ -769,6 +769,11 @@ select {
 }
 .note { color: var(--dim); font-size: 13px; }
 .note strong { color: var(--text); }
+/* Sits under the centred timer; always mounted while tracking splits (see
+   App.tsx), so `invisible` -- not display:none -- is what keeps its line
+   from being added/removed as the timer starts and stops. */
+.leg-indicator { text-align: center; margin: 4px 0 0; }
+.leg-indicator.invisible { visibility: hidden; }
 .error { color: var(--danger); font-size: 13px; }
 
 .import-list { margin: 12px 0; }
