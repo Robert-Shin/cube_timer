@@ -34,11 +34,21 @@ export function useTimer(
   const legRef = useRef(0)
   const onStopRef = useRef(onStop)
   onStopRef.current = onStop
-  // Snapshotted in start(), not assigned here on every render: this must
-  // stay fixed for the length of a solve, or a discipline change mid-solve
-  // (the <select> is clickable while running) would retarget an in-flight
-  // solve's leg count out from under it. Assigning here would apply the
-  // change immediately instead of from the next solve.
+  // Always the newest `boundaries`, updated every render -- mirrors
+  // onStopRef above. Only start() may read this; nothing else should, or it
+  // reintroduces the mid-solve-retarget bug that boundariesRef exists to
+  // prevent (see below).
+  const latestBoundaries = useRef(boundaries)
+  latestBoundaries.current = boundaries
+  // Snapshotted from latestBoundaries.current inside start(), NOT assigned
+  // here on every render: this must stay fixed for the length of a solve, or
+  // a discipline change mid-solve (the <select> is clickable while running)
+  // would retarget an in-flight solve's leg count out from under it. A
+  // change to `boundaries` only takes effect on the next call to start(),
+  // i.e. the next solve. Collapsing this back into one ref reintroduces that
+  // bug; keeping `boundaries` itself out of start()'s deps (see below) is
+  // what keeps start() referentially stable so the key-binding effect never
+  // re-runs mid-solve.
   const boundariesRef = useRef(boundaries)
 
   const set = useCallback((s: TimerState) => {
@@ -58,10 +68,16 @@ export function useTimer(
     setLeg(0)
     setDisplay(0)
     // Fixed for the life of this solve -- see the comment on the ref.
-    boundariesRef.current = boundaries
+    // Sourced from latestBoundaries, not the `boundaries` parameter, so that
+    // `boundaries` never enters start()'s deps: pulling it in would change
+    // start()'s identity on every discipline change, tearing down and
+    // rebuilding the key-binding effect below (which lists `start` as a
+    // dep) mid-solve -- cancelling the running rAF chain with nothing to
+    // restart it, freezing the on-screen clock until the next start().
+    boundariesRef.current = latestBoundaries.current
     set('running')
     rafRef.current = requestAnimationFrame(tick)
-  }, [set, tick, boundaries])
+  }, [set, tick])
 
   /**
    * Records a leg boundary without stopping the clock. Always builds a new
