@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { classifyRequestError, currentStreak, partitionFriendships } from './friends'
+import { classifyRequestError, currentStreak, partitionFriendships, toSolves } from './friends'
 
 const ME = 'me-uuid'
 
@@ -163,5 +163,40 @@ describe('classifyRequestError', () => {
   it('retries anything unfamiliar rather than reporting a wrong reason', () => {
     expect(classifyRequestError({ code: 'PGRST301', message: 'JWT expired' })).toBe('retry')
     expect(classifyRequestError({ message: 'Failed to fetch' })).toBe('retry')
+  })
+})
+
+describe('toSolves', () => {
+  const rows = [
+    { day: '2026-08-25', time_ms: 12_340, penalty: 'none' },
+    { day: '2026-08-24', time_ms: 23_450, penalty: 'plus2' },
+    { day: '2026-08-24', time_ms: 34_560, penalty: 'dnf' },
+  ]
+
+  it('preserves the server order, which is what averageOf reads', () => {
+    expect(toSolves(rows, 'sess').map((s) => s.timeMs)).toEqual([12_340, 23_450, 34_560])
+  })
+
+  it('round-trips penalties, so a friend DNF stays a DNF', () => {
+    expect(toSolves(rows, 'sess').map((s) => s.penalty)).toEqual(['none', 'plus2', 'dnf'])
+  })
+
+  it('treats an unrecognised penalty as none rather than trusting the server string', () => {
+    const odd = [{ day: '2026-08-25', time_ms: 1000, penalty: 'wat' }]
+    expect(toSolves(odd, 'sess')[0].penalty).toBe('none')
+  })
+
+  it('gives each solve a distinct id, since React keys off it', () => {
+    const ids = toSolves(rows, 'sess').map((s) => s.id)
+    expect(new Set(ids).size).toBe(3)
+  })
+
+  it('leaves parity undefined -- untracked, not "measured as none"', () => {
+    expect(toSolves(rows, 'sess')[0].parity).toBeUndefined()
+  })
+
+  it('turns the day into a timestamp the trend tooltip can print', () => {
+    const [first] = toSolves(rows, 'sess')
+    expect(new Date(first.createdAt).toISOString().slice(0, 10)).toBe('2026-08-25')
   })
 })

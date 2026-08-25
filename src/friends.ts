@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { EventId } from './types'
+import type { EventId, Penalty, Solve } from './types'
 
 export type FriendState = 'pending' | 'accepted'
 
@@ -309,6 +309,75 @@ export async function friendDaily(
     const row = data?.[0]
     if (!row) return 'none'
     return { timeMs: row.penalty === 'dnf' ? null : row.time_ms }
+  } catch {
+    // A thrown rejection is the fetch layer failing outright -- never a
+    // decision by the server.
+    return null
+  }
+}
+
+/** At most this many solves per session, matching friend_solves' server cap. */
+export const FRIEND_SOLVE_CAP = 2000
+
+export interface FriendSolveRow {
+  /** UTC date, 'YYYY-MM-DD'. friend_solves returns a date, never a timestamp. */
+  day: string
+  time_ms: number
+  penalty: string
+}
+
+const PENALTIES: Penalty[] = ['none', 'plus2', 'dnf']
+
+/**
+ * friend_solves rows as the `Solve` objects the charts and stats.ts already
+ * consume, so a friend's ao12 is computed by the SAME function as yours and
+ * the two can never disagree.
+ *
+ * Fields with no counterpart on the wire are filled honestly rather than
+ * fabricated: there is no scramble (the server does not send one, by
+ * design), and `parity` stays undefined -- "untracked", which is true, and
+ * different from `[]`, which would claim it was measured as none.
+ *
+ * `createdAt` is midnight UTC of the solve's day, which is all the server
+ * discloses. It is used only to print a date in the trend tooltip; ORDER is
+ * carried by the array, not by this field, so a whole session sharing one
+ * timestamp changes nothing.
+ */
+export function toSolves(rows: FriendSolveRow[], sessionId: string): Solve[] {
+  return rows.map((r, i) => ({
+    // Index-based, not crypto.randomUUID(): a stable id means React does not
+    // remount every row when the list re-renders.
+    id: `${sessionId}:${i}`,
+    sessionId,
+    scramble: '',
+    timeMs: r.time_ms,
+    // Never trust the string to be one of ours. An unexpected value falling
+    // through as a penalty would be rendered, and 'dnf' in particular
+    // changes what every average means.
+    penalty: PENALTIES.includes(r.penalty as Penalty) ? (r.penalty as Penalty) : 'none',
+    createdAt: Date.parse(`${r.day}T00:00:00.000Z`),
+    updatedAt: 0,
+  }))
+}
+
+/**
+ * A friend's solves for one session, newest first.
+ *
+ * null is a genuine failure. An EMPTY array is not null: it means this
+ * friend has no solves in this session, which is an ordinary state. Reading
+ * "no rows" as "no access" is the same mistake class this file documents
+ * twice already.
+ */
+export async function friendSolves(userId: string, sessionId: string): Promise<Solve[] | null> {
+  if (!supabase) return null
+  try {
+    const { data, error } = await supabase.rpc('friend_solves', {
+      p_user: userId,
+      p_session: sessionId,
+      p_limit: FRIEND_SOLVE_CAP,
+    })
+    if (error) return null
+    return toSolves((data ?? []) as FriendSolveRow[], sessionId)
   } catch {
     // A thrown rejection is the fetch layer failing outright -- never a
     // decision by the server.
