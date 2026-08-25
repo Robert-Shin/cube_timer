@@ -34,10 +34,12 @@ export function useTimer(
   const legRef = useRef(0)
   const onStopRef = useRef(onStop)
   onStopRef.current = onStop
-  // Read inside handlers that are bound once, so a mid-solve change of
-  // discipline cannot leave a stale count behind.
+  // Snapshotted in start(), not assigned here on every render: this must
+  // stay fixed for the length of a solve, or a discipline change mid-solve
+  // (the <select> is clickable while running) would retarget an in-flight
+  // solve's leg count out from under it. Assigning here would apply the
+  // change immediately instead of from the next solve.
   const boundariesRef = useRef(boundaries)
-  boundariesRef.current = boundaries
 
   const set = useCallback((s: TimerState) => {
     stateRef.current = s
@@ -55,11 +57,18 @@ export function useTimer(
     legRef.current = 0
     setLeg(0)
     setDisplay(0)
+    // Fixed for the life of this solve -- see the comment on the ref.
+    boundariesRef.current = boundaries
     set('running')
     rafRef.current = requestAnimationFrame(tick)
-  }, [set, tick])
+  }, [set, tick, boundaries])
 
-  /** Records a leg boundary without stopping the clock. */
+  /**
+   * Records a leg boundary without stopping the clock. Always builds a new
+   * array rather than pushing in place: stop() hands splitsRef.current
+   * straight to onStop, so mutating it after that call would keep growing
+   * the array the caller already has.
+   */
   const split = useCallback(() => {
     splitsRef.current = [...splitsRef.current, performance.now() - startRef.current]
     legRef.current += 1
