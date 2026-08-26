@@ -2,9 +2,16 @@
   <!-- The same mark as the in-app wordmark (App.tsx, .wordmark .mark): a
        normal distribution over a baseline. The art is the wordmark's 32x22
        viewBox shifted down 5 to sit centred in a square tab icon, and the
-       colours are the --accent / --dim tokens from index.css hard-coded,
+       colours are the accent and dim tokens from index.css hard-coded,
        since a favicon cannot read CSS variables. Filled rather than stroked
-       so the curve survives 16px. -->
+       so the curve survives 16px.
+
+       Those token names are written here WITHOUT their leading dashes on
+       purpose: XML forbids a double hyphen inside a comment, and spelling
+       them the CSS way made this file unparseable. A broken SVG icon fails
+       silently, leaving the previously cached favicon on screen, so the
+       breakage looked like a caching problem for two rounds of fixes.
+       src/icon.test.ts guards this. -->
   <style>
     .curve { fill: #2a78d6; }
     .axis { stroke: #6e6e6e; }
