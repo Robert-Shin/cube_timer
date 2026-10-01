@@ -4,6 +4,8 @@ import { supabase, syncConfigured } from '../supabase'
 import type { Store } from '../storage'
 import { mergeRows, dirtyRows, newestFirst } from './merge'
 import { rowToSession, rowToSolve, sessionToRow, solveToRow } from './rows'
+import type { SessionRow, SolveRow } from './rows'
+import { needsFullPull, paginate } from './pull'
 import { flushQueue, publishBestOfDay } from '../dailyClient'
 import { isChallengeEvent } from '../challengeEvents'
 
@@ -20,6 +22,49 @@ interface Cursors {
 }
 
 const cursorKey = (userId: string) => `cube-timer.sync.${userId}`
+
+/** The synced tables, as PostgREST names them. */
+type Table = 'sessions' | 'solves'
+/** The client, past the `syncConfigured` guard. */
+type Db = NonNullable<typeof supabase>
+
+/**
+ * How many rows of a table this account can see, tombstones included.
+ *
+ * A head request, so the count costs no rows. RLS scopes it to the caller,
+ * which is what makes it comparable with the local store.
+ */
+async function remoteCount(db: Db, table: Table): Promise<number> {
+  const { count, error } = await db.from(table).select('id', { count: 'exact', head: true })
+  if (error) throw error
+  return count ?? 0
+}
+
+/**
+ * Every row of a table changed since `since`, in full.
+ *
+ * Paged rather than fetched in one request: PostgREST truncates an unbounded
+ * select at its `max-rows` ceiling and still reports success, so a single
+ * select quietly returns a partial answer that the cursor below then advances
+ * past. See pull.ts.
+ */
+function pullAll<T>(db: Db, table: Table, since: string): Promise<T[]> {
+  return paginate((from, to) =>
+    db
+      .from(table)
+      .select('*')
+      .gt('updated_at', since)
+      // A total order. `updated_at` alone is not one -- stamps collide, and a
+      // row that shifts between two requests lands in both pages or neither.
+      .order('updated_at')
+      .order('id')
+      .range(from, to)
+      .then(({ data, error }) => {
+        if (error) throw error
+        return (data ?? []) as T[]
+      }),
+  )
+}
 
 function readCursors(userId: string): Cursors {
   try {
@@ -95,16 +140,28 @@ export function useSync(store: Store, applyRemote: (next: Store) => void) {
       )
 
       // --- pull remote changes ------------------------------------------
-      const since = new Date(cursors.pulledAt).toISOString()
+      // The cursor is trusted only while local actually holds everything it
+      // has already moved past. Deletes are soft, so neither side ever loses
+      // a row and the remote total is a floor for the local one -- more rows
+      // there than here means rows are missing, and they are older than the
+      // cursor by definition, so no incremental query can reach them. See
+      // needsFullPull: this is what makes that state recoverable rather than
+      // permanent.
+      const full = needsFullPull(
+        {
+          sessions: await remoteCount(supabase, 'sessions'),
+          solves: await remoteCount(supabase, 'solves'),
+        },
+        { sessions: local.sessions.length, solves: local.solves.length },
+      )
+      const since = new Date(full ? 0 : cursors.pulledAt).toISOString()
       const [remoteSessions, remoteSolves] = await Promise.all([
-        supabase.from('sessions').select('*').gt('updated_at', since),
-        supabase.from('solves').select('*').gt('updated_at', since),
+        pullAll<SessionRow>(supabase, 'sessions', since),
+        pullAll<SolveRow>(supabase, 'solves', since),
       ])
-      if (remoteSessions.error) throw remoteSessions.error
-      if (remoteSolves.error) throw remoteSolves.error
 
-      const pulledSessions = (remoteSessions.data ?? []).map(rowToSession)
-      const pulledSolves = (remoteSolves.data ?? []).map(rowToSolve)
+      const pulledSessions = remoteSessions.map(rowToSession)
+      const pulledSolves = remoteSolves.map(rowToSolve)
 
       if (pulledSessions.length || pulledSolves.length) {
         const current = storeRef.current
